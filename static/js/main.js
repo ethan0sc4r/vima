@@ -6,7 +6,7 @@ let tuttiDatiLog = {};
 let gridLayers = {};
 let config = {};
 let colorChartInstance = null, shipChartInstance = null;
-let loadedExternalLayers = {}; // Oggetto per memorizzare i layer Leaflet
+let loadedExternalLayers = {};
 
 // Costanti globali
 const boxSize = 10 / 60;
@@ -17,7 +17,7 @@ const BORDO_VERDE = "#66BB6A", BORDO_GIALLO = "#FFEE58", BORDO_ROSSO = "#EF5350"
 const COLOR_MAP = { '1': '#f44336', '2': '#2196F3', '3': '#4CAF50' };
 
 
-// --- 2. LOGICA MODALI, PANNELLI E HELPERS ---
+// --- 2. LOGICA MODALI, PANNELLI E NOTIFICHE ---
 function openModal(modalId) {
     if (modalId === 'modal-log-entry') {
         document.getElementById('log-modal-title').textContent = 'Aggiungi Log';
@@ -31,9 +31,8 @@ function openModal(modalId) {
         if(boxInput) boxInput.readOnly = false;
         
         const logForm = document.getElementById('log-form');
-        if (logForm) {
-            logForm.reset();
-        }
+        if (logForm) logForm.reset();
+        
         const dateInput = document.getElementById('dateInput');
         if(dateInput) dateInput.valueAsDate = new Date();
     }
@@ -108,19 +107,17 @@ async function disegnaGriglia(bounds) {
     let boundsToDraw = bounds;
     if (!boundsToDraw) {
         boundsToDraw = {
-            latStart: parseFloat(document.getElementById('lat_start').value),
-            lonStart: parseFloat(document.getElementById('lon_start').value),
-            latEnd: parseFloat(document.getElementById('lat_end').value),
-            lonEnd: parseFloat(document.getElementById('lon_end').value)
+            lat_start: parseFloat(document.getElementById('lat_start').value),
+            lon_start: parseFloat(document.getElementById('lon_start').value),
+            lat_end: parseFloat(document.getElementById('lat_end').value),
+            lon_end: parseFloat(document.getElementById('lon_end').value)
         };
-        if (Object.values(boundsToDraw).some(isNaN)) { showToast("Coordinate non valide.", 'error'); return; }
-        config.grid_bounds = {
-            lat_start: boundsToDraw.latStart,
-            lon_start: boundsToDraw.lonStart,
-            lat_end: boundsToDraw.latEnd,
-            lon_end: boundsToDraw.lonEnd
-        };
-        await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
+        if (Object.values(boundsToDraw).some(isNaN)) {
+            showToast("Coordinate non valide.", 'error');
+            return;
+        }
+        const newConfig = { ...config, grid_bounds: boundsToDraw };
+        await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newConfig) });
     }
     
     gridLayerGroup.clearLayers();
@@ -219,7 +216,8 @@ async function saveLog() {
         ship: document.getElementById('shipInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
-    if (!boxData.boxId || !boxData.date || !boxData.ship) { showToast("Tutti i campi sono obbligatori.", 'error'); return; }
+    if (!boxData.boxId || !boxData.date || !boxData.ship) { showToast("ID Box, Data e Nave sono campi obbligatori.", 'error'); return; }
+    if (!gridLayers[boxData.boxId]) { showToast(`L'ID Box "${boxData.boxId}" non esiste sulla mappa.`, 'error'); return; }
     
     const url = logId ? `/api/logs/${logId}` : '/api/logs';
     const method = logId ? 'PUT' : 'POST';
@@ -355,7 +353,7 @@ function processCSV(event) {
 // --- 7. GESTIONE LAYER ESTERNI ---
 function openLayerManager() {
     renderLayerManagerList();
-    openModal('modal-layer-manager');
+    document.getElementById('layer-manager-panel').classList.add('visible');
 }
 function renderLayerManagerList() {
     const container = document.getElementById('layer-list-container');
@@ -453,7 +451,7 @@ function loadExternalLayers() {
         if (map.hasLayer(loadedExternalLayers[key])) map.removeLayer(loadedExternalLayers[key]);
         if (layerControl) layerControl.removeLayer(loadedExternalLayers[key]);
     }
-    loadedExternalLayers = {};
+    const newLoadedLayers = {};
     if (config.external_layers) {
         config.external_layers.forEach((layerConfig, index) => {
             const layerId = `${layerConfig.type}-${index}`;
@@ -467,12 +465,13 @@ function loadExternalLayers() {
                 fetch(layerConfig.url).then(res => res.json()).then(data => layer.addData(data));
             }
             if(layer) {
-                loadedExternalLayers[layerId] = layer;
+                newLoadedLayers[layerId] = layer;
                 layer.addTo(map);
                 if (layerControl) layerControl.addOverlay(layer, layerConfig.name);
             }
         });
     }
+    loadedExternalLayers = newLoadedLayers;
 }
 
 // --- 8. DASHBOARD ---
@@ -569,7 +568,7 @@ async function inizializzaApplicazione() {
         gridLayerGroup = L.featureGroup().addTo(map);
         const baseLayers = { "Mappa Base": baseMapLayer };
         const overlayLayers = { "Griglia Interattiva": gridLayerGroup };
-        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: false }).addTo(map);
+        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);
         
         map.createPane('shapefilePane');
         map.getPane('shapefilePane').style.zIndex = 390;

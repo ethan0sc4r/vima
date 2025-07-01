@@ -1,21 +1,22 @@
 {
-    "grid_bounds": {
-        "lat_start": 46.5,
-        "lon_start": 12.0,
-        "lat_end": 40.0,
-        "lon_end": 20.0
-    },
     "base_map": {
-        "url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "attribution": "© OpenStreetMap"
+        "attribution": "\u00a9 OpenStreetMap",
+        "url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    },
+    "external_layers": [],
+    "grid_bounds": {
+        "lat_end": 40,
+        "lat_start": 46.5,
+        "lon_end": 20,
+        "lon_start": 12
     },
     "wms_layers": [
         {
-            "name": "Esempio WMS: Batimetria",
-            "url": "https://servizigis.isprambiente.it/arcgis/services/ambiente_marino/mappa_batimetrica_italia/MapServer/WmsServer",
-            "layers": "0",
             "format": "image/png",
-            "transparent": true
+            "layers": "lay",
+            "name": "test",
+            "transparent": true,
+            "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Rete_ferroviaria.map&service=wms"
         }
     ]
 }
