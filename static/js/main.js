@@ -1,4 +1,3 @@
-// --- 1. DICHIARAZIONE GLOBALE ---
 let map;
 let layerControl;
 let gridLayerGroup;
@@ -368,7 +367,7 @@ function renderLayerManagerList() {
             const item = document.createElement('div');
             item.className = 'layer-item';
             item.innerHTML = `
-                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${map.hasLayer(loadedExternalLayers[layerId]) ? '👁️' : '⚪'}</span>
+                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${map.hasLayer(loadedExternalLayers[layerId]) ? '�️' : '⚪'}</span>
                 <div class="reorder-arrows"><span onclick="reorderLayer(${index}, -1)">▲</span><span onclick="reorderLayer(${index}, 1)">▼</span></div>
                 <span class="layer-name">${layer.name} (${layer.type.toUpperCase()})</span>
                 <div class="layer-actions"><span title="Modifica Layer" onclick="openEditLayerModal(${index})">✎</span><span title="Cancella Layer" onclick="deleteLayer(${index})">🗑️</span></div>`;
@@ -457,7 +456,8 @@ function loadExternalLayers() {
             const layerId = `${layerConfig.type}-${index}`;
             let layer;
             if (layerConfig.type === 'wms') {
-                layer = L.tileLayer.wms(layerConfig.url, { ...layerConfig, pane: 'shapefilePane' });
+                const proxyUrl = `/api/wms_proxy`;
+                layer = L.tileLayer.wms(proxyUrl, { ...layerConfig, pane: 'shapefilePane', wms_server_url: layerConfig.url, version: '1.3.0', crs: L.CRS.EPSG4326 });
             } else if (layerConfig.type === 'shp') {
                 layer = L.shpfile(layerConfig.url, { pane: 'shapefilePane', style: () => layerConfig.style });
             } else if (layerConfig.type === 'geojson') {
@@ -466,7 +466,6 @@ function loadExternalLayers() {
             }
             if(layer) {
                 newLoadedLayers[layerId] = layer;
-                layer.addTo(map);
                 if (layerControl) layerControl.addOverlay(layer, layerConfig.name);
             }
         });
