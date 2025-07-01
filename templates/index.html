@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mappa Web App</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/leaflet.css') }}"/>
+    <script src="{{ url_for('static', filename='js/leaflet.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/shp.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/leaflet.shpfile.js') }}"></script>
+    
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; }
+        #map { width: 100%; height: 100%; cursor: crosshair; }
+        .fab-container { position: absolute; bottom: 20px; right: 20px; z-index: 1001; display: flex; flex-direction: column; gap: 10px; }
+        .fab { width: 56px; height: 56px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; border: none; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: transform 0.2s ease, background-color 0.2s ease; }
+        .fab:hover { transform: scale(1.1); }
+        .fab-grid { background-color: #4CAF50; } .fab-log { background-color: #008CBA; } .fab-data { background-color: #ff9800; } .fab-filter { background-color: #673AB7; } .fab-wms { background-color: #795548; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); z-index: 1002; display: none; align-items: center; justify-content: center; }
+        .modal-overlay.visible { display: flex; }
+        .modal-content { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 5px 20px rgba(0,0,0,0.3); width: 90%; max-width: 450px; position: relative; }
+        .modal-close { position: absolute; top: 10px; right: 15px; font-size: 28px; font-weight: bold; color: #888; cursor: pointer; }
+        .modal-content h4 { margin-top: 0; margin-bottom: 20px; color: #333; }
+        .grid-layout { display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end; }
+        .control-group { display: flex; flex-direction: column; flex-grow: 1; }
+        label { font-size: 0.9em; margin-bottom: 5px; color: #555; }
+        input, button, select { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+        button { cursor: pointer; color: white; border: none; }
+        .color-selector label { margin-right: 15px; font-weight: normal; display:inline-flex; align-items: center;}
+        .color-selector input { margin-right: 5px; }
+        .btn-draw { background: #4CAF50; } .btn-main-action { background: #008CBA; } .btn-reset { background: #f44336; }
+        .btn-export-log { background: #607D8B; }
+        .full-width { width: 100%; }
+        .info-box { position: absolute; background-color: rgba(255, 255, 255, 0.85); padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 14px; z-index: 998; box-shadow: 0 1px 5px rgba(0,0,0,0.4); pointer-events: none; }
+        #coords-box { bottom: 20px; right: 90px; text-align: right;}
+        #dms-box { bottom: 20px; left: 10px; }
+        #history-panel { position: absolute; top: 0; right: 0; width: 350px; max-width: 80vw; height: 100%; background: #ffffff; box-shadow: -3px 0px 15px rgba(0,0,0,0.2); z-index: 1001; transform: translateX(100%); transition: transform 0.3s ease-in-out; display: flex; flex-direction: column; }
+        #history-panel.visible { transform: translateX(0); }
+        .history-header { padding: 15px; border-bottom: 1px solid #ccc; background-color: #f5f5f5; }
+        .history-header h4 { margin: 0 0 10px 0; }
+        .history-header .close-btn { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; }
+        .history-filter { display: flex; gap: 10px; align-items: center; }
+        .history-filter input { flex-grow: 1; }
+        #history-content { padding: 15px; overflow-y: auto; flex-grow: 1; }
+        .history-item { border-bottom: 1px solid #eee; padding: 10px 0; font-size: 14px; }
+        .history-item:last-child { border-bottom: none; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="coords-box" class="info-box">Sposta il mouse sulla mappa</div>
+    <div id="dms-box" class="info-box">GMS: --</div>
+
+    <div class="fab-container">
+        <button class="fab fab-grid" title="Gestione Griglia" onclick="openModal('modal-grid')">▦</button>
+        <button class="fab fab-log" title="Aggiungi Log" onclick="openModal('modal-log-entry')">✎</button>
+        <button class="fab fab-data" title="Gestione Dati" onclick="openModal('modal-data-manage')">💾</button>
+        <button class="fab fab-filter" title="Filtri Visualizzazione" onclick="openModal('modal-filter')">▼</button>
+        <button class="fab fab-wms" title="Aggiungi Layer WMS" onclick="openModal('modal-wms')">🛰️</button>
+    </div>
+
+    <div id="history-panel">
+        <div class="history-header">
+            <span class="close-btn" onclick="closeHistoryPanel()">&times;</span>
+            <h4 id="history-title">Storico Box</h4>
+            <div class="history-filter">
+                <label for="history-years">Ultimi:</label>
+                <input type="number" id="history-years" value="1" min="1" style="width: 60px; padding: 5px;">
+                <label>anni</label>
+                <button id="history-show-btn" class="btn-main-action">Mostra</button>
+            </div>
+        </div>
+        <div id="history-content"><p>Clicca su un box per vederne lo storico.</p></div>
+    </div>
+
+    <div id="modal-grid" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <h4>1. Definizione Griglia</h4>
+            <div class="grid-layout">
+                <div class="control-group"><label for="lat_start">Lat Inizio</label><input type="number" id="lat_start" value="46.5" step="0.1"></div>
+                <div class="control-group"><label for="lon_start">Lon Inizio</label><input type="number" id="lon_start" value="12" step="0.1"></div>
+            </div>
+            <div class="grid-layout" style="margin-top: 10px;">
+                <div class="control-group"><label for="lat_end">Lat Fine</label><input type="number" id="lat_end" value="40" step="0.1"></div>
+                <div class="control-group"><label for="lon_end">Lon Fine</label><input type="number" id="lon_end" value="20" step="0.1"></div>
+            </div>
+            <div class="grid-layout" style="margin-top: 20px;">
+                <button class="btn-draw" onclick="disegnaGriglia()">Disegna e Salva</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-log-entry" class="modal-overlay" onclick="closeAllModals()">
+         <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <h4>2. Aggiungi/Modifica Log</h4>
+            <div class="grid-layout">
+                <div class="control-group"><label for="boxInput">ID Box</label><input type="text" id="boxInput" placeholder="AA-01"></div>
+                <div class="control-group"><label for="dateInput">Data</label><input type="date" id="dateInput"></div>
+            </div>
+            <div class="grid-layout" style="margin-top: 10px;">
+                <div class="control-group full-width"><label for="shipInput">Nave</label><input type="text" id="shipInput" placeholder="Nome Nave"></div>
+            </div>
+            <div class="control-group" style="margin-top: 15px;">
+                <label>Colore Riempimento</label>
+                <div class="color-selector">
+                    <label><input type="radio" name="logColor" value="1" checked> Rosso</label>
+                    <label><input type="radio" name="logColor" value="2"> Blu</label>
+                    <label><input type="radio" name="logColor" value="3"> Verde</label>
+                </div>
+            </div>
+            <div class="grid-layout" style="margin-top: 20px;">
+                 <button class="btn-main-action full-width" onclick="aggiungiBoxDaInput()">Aggiungi Log</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-data-manage" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <h4>3. Gestione Dati</h4>
+             <div class="grid-layout">
+                 <div class="control-group full-width"><label>Importa Dati Log da File CSV</label><input type="file" id="csvFileInput" accept=".csv" onchange="processCSV(event)" style="padding: 5px;"></div>
+             </div>
+             <div class="grid-layout" style="margin-top:20px;">
+                <button class="btn-export-log full-width" onclick="esportaLogCSV()">Esporta Tutti i Log in CSV</button>
+             </div>
+             <div class="grid-layout" style="margin-top:10px;">
+                <button class="btn-reset full-width" onclick="resetDatiLog()">Reset Tutti i Log</button>
+             </div>
+        </div>
+    </div>
+
+    <div id="modal-filter" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <h4>Filtri di Visualizzazione</h4>
+            <div class="control-group" style="margin-bottom: 15px;"><label for="filterDate">Filtra per Data:</label><input type="date" id="filterDate"></div>
+            <div class="control-group" style="margin-bottom: 15px;"><label for="filterShip">Filtra per Nave (anche parziale):</label><input type="text" id="filterShip" placeholder="Nome nave..."></div>
+            <div class="control-group" style="margin-bottom: 15px;"><label for="filterColor">Filtra per Colore:</label><select id="filterColor" class="full-width"><option value="">Tutti</option><option value="1">Rosso</option><option value="2">Blu</option><option value="3">Verde</option></select></div>
+            <div class="control-group"><label for="filterStatus">Filtra per Stato Scadenza:</label><select id="filterStatus" class="full-width"><option value="">Tutti</option><option value="ok">Non Scaduti (&lt;=15gg)</option><option value="warning">In Scadenza (16-30gg)</option><option value="expired">Scaduti (&gt;30gg)</option></select></div>
+            <div class="grid-layout" style="margin-top: 20px;">
+                <button class="btn-main-action" onclick="applicaFiltri()">Applica Filtri</button>
+                <button class="btn-reset" onclick="rimuoviFiltri()">Rimuovi Filtri</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="modal-wms" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <h4>Aggiungi Nuovo Layer WMS</h4>
+            <div class="control-group" style="margin-bottom: 10px;"><label for="wmsName">Nome Layer (es. Batimetria)</label><input type="text" id="wmsName" placeholder="Nome da visualizzare"></div>
+            <div class="control-group" style="margin-bottom: 10px;"><label for="wmsUrl">URL del Servizio WMS</label><input type="text" id="wmsUrl" placeholder="https://servizio.wms/server?"></div>
+            <div class="control-group" style="margin-bottom: 10px;"><label for="wmsLayers">Nome Tecnico del Layer</label><input type="text" id="wmsLayers" placeholder="nome_layer_nel_servizio"></div>
+            <div class="grid-layout" style="margin-top: 20px;"><button class="btn-main-action full-width" onclick="aggiungiWMSDaInput()">Aggiungi Layer alla Config</button></div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
