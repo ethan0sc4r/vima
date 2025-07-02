@@ -1,9 +1,11 @@
 import sqlite3
 import json
 import os
+import requests
 from flask import Flask, render_template, request, jsonify, g, Response
 from flask_sock import Sock
 from collections import defaultdict
+from datetime import datetime
 
 # --- CONFIGURAZIONE ---
 app = Flask(__name__)
@@ -28,31 +30,40 @@ def close_connection(exception):
 
 # --- FUNZIONE PER WEB SOCKETS ---
 def broadcast(message):
+    """Invia un messaggio a tutti i client connessi."""
+    disconnected_clients = []
     for client in list(clients):
         try:
             client.send(json.dumps(message))
         except Exception:
-            clients.remove(client)
+            disconnected_clients.append(client)
+    for client in disconnected_clients:
+        clients.remove(client)
 
 # --- ROUTE E API ---
 @app.route('/')
 def index():
+    """Serve la pagina web principale."""
     return render_template('index.html')
 
 @sock.route('/ws')
 def websocket(ws):
+    """Gestisce le connessioni WebSocket in entrata."""
+    print(f"Nuovo client connesso al WebSocket. Totale client: {len(clients) + 1}")
     clients.append(ws)
     try:
         while True:
+            # Mantiene la connessione attiva. Il client non invia dati.
             ws.receive(timeout=None)
     except Exception:
-        pass
+        print(f"Client WebSocket disconnesso. Totale client: {len(clients) - 1}")
     finally:
         if ws in clients:
             clients.remove(ws)
 
 @app.route('/api/wms_proxy')
 def wms_proxy():
+    """Funziona come un proxy per le richieste WMS per aggirare i problemi di CORS."""
     wms_params = request.args.to_dict()
     wms_server_url = wms_params.pop('wms_server_url', None)
     if not wms_server_url:
@@ -70,6 +81,7 @@ def wms_proxy():
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def manage_config():
+    """Legge e scrive il file di configurazione globale."""
     if request.method == 'POST':
         try:
             new_config = request.json
@@ -87,12 +99,13 @@ def manage_config():
 
 @app.route('/api/logs', methods=['GET', 'POST'])
 def manage_logs():
+    """Gestisce l'aggiunta e la lettura dei log dal database."""
     db = get_db()
     if request.method == 'POST':
         log_data = request.json
         db.execute(
-            'INSERT INTO logs (box_id, log_timestamp, ship, color_code) VALUES (?, ?, ?, ?)',
-            (log_data['boxId'], log_data['timestamp'], log_data['ship'], log_data['colorCode'])
+            'INSERT INTO logs (box_id, log_timestamp, ship, color_code, import_id) VALUES (?, ?, ?, ?, ?)',
+            (log_data['boxId'], log_data['timestamp'], log_data['ship'], log_data['colorCode'], 'manual')
         )
         db.commit()
         log_cursor = db.execute('SELECT * FROM logs WHERE box_id = ? ORDER BY log_timestamp DESC', (log_data['boxId'],)).fetchall()
@@ -106,8 +119,60 @@ def manage_logs():
         logs_by_box[row['box_id']].append(dict(row))
     return jsonify(logs_by_box)
 
+@app.route('/api/logs/import', methods=['POST'])
+def import_logs_batch():
+    """Importa un intero batch di log da un CSV."""
+    csv_text = request.data.decode('utf-8')
+    import_id = f"import-{int(datetime.now().timestamp())}"
+    logs_to_insert = []
+    
+    righe = csv_text.split('\n')
+    for riga in righe:
+        if not riga.strip() or riga.lower().startswith('timestamp;box'):
+            continue
+        parts = riga.strip().split(';')
+        if len(parts) >= 4:
+            timestamp, box_id, ship, color_code = parts[0], parts[1], parts[2], parts[3]
+            logs_to_insert.append((box_id.upper(), timestamp, ship, color_code, import_id))
+
+    if logs_to_insert:
+        db = get_db()
+        db.executemany(
+            'INSERT INTO logs (box_id, log_timestamp, ship, color_code, import_id) VALUES (?, ?, ?, ?, ?)',
+            logs_to_insert
+        )
+        db.commit()
+        broadcast({'type': 'full_reload_needed'})
+    
+    return jsonify({'status': 'success', 'imported_count': len(logs_to_insert), 'import_id': import_id})
+
+@app.route('/api/logs/batch_delete', methods=['POST'])
+def delete_logs_batch():
+    """Cancella un gruppo di log (per ID o per import_id)."""
+    data = request.json
+    db = get_db()
+    
+    if 'log_ids' in data and data['log_ids']:
+        placeholders = ', '.join('?' for _ in data['log_ids'])
+        db.execute(f"DELETE FROM logs WHERE id IN ({placeholders})", data['log_ids'])
+    elif 'import_id' in data:
+        db.execute("DELETE FROM logs WHERE import_id = ?", (data['import_id'],))
+    
+    db.commit()
+    broadcast({'type': 'full_reload_needed'})
+    return jsonify({'status': 'success'})
+
+@app.route('/api/imports', methods=['GET'])
+def get_imports():
+    """Restituisce una lista di tutti i batch di importazione unici."""
+    db = get_db()
+    cursor = db.execute("SELECT DISTINCT import_id FROM logs WHERE import_id IS NOT NULL AND import_id != 'manual'")
+    imports = [row['import_id'] for row in cursor.fetchall()]
+    return jsonify(imports)
+
 @app.route('/api/logs/<int:log_id>', methods=['PUT', 'DELETE'])
 def manage_single_log(log_id):
+    """Aggiorna o cancella un singolo record di log."""
     db = get_db()
     log_to_manage = db.execute('SELECT box_id FROM logs WHERE id = ?', (log_id,)).fetchone()
     if not log_to_manage: return jsonify({'status': 'error', 'message': 'Log non trovato'}), 404
@@ -128,13 +193,16 @@ def manage_single_log(log_id):
 
 @app.route('/api/logs/reset', methods=['POST'])
 def reset_logs():
+    """Svuota completamente la tabella dei log."""
     db = get_db()
     db.execute('DELETE FROM logs')
     db.commit()
     broadcast({'type': 'logs_reset'})
     return jsonify({'status': 'success'})
 
+# BLOCCO DI AVVIO SERVER
 if __name__ == '__main__':
+    # Crea un file di configurazione di default se non esiste al primo avvio
     if not os.path.exists(CONFIG_FILE):
         print(f"File '{CONFIG_FILE}' non trovato. Creazione di una configurazione di default.")
         default_config = {
@@ -144,4 +212,5 @@ if __name__ == '__main__':
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(default_config, f, indent=4)
+            
     app.run(debug=True, host='0.0.0.0', port=5000)

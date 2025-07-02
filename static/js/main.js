@@ -44,6 +44,160 @@ function openModal(modalId) {
     const modal = document.getElementById(modalId);
     if(modal) modal.classList.add('visible');
 }
+async function openLogManager() {
+    renderLogTable();
+    await populateImportSelect();
+    openModal('modal-log-manager');
+}
+/**
+ * Popola il menu a tendina per l'eliminazione dei batch di importazione.
+ */
+async function populateImportSelect() {
+    try {
+        const response = await fetch('/api/imports');
+        if (!response.ok) throw new Error('Errore di rete nel fetch degli imports');
+        const imports = await response.json();
+        const select = document.getElementById('import-select');
+        if (!select) return;
+
+        select.innerHTML = '<option value="">Seleziona un batch...</option>';
+        imports.forEach(importId => {
+            select.innerHTML += `<option value="${importId}">${importId}</option>`;
+        });
+    } catch (error) {
+        console.error("Errore nel caricamento dei batch di importazione:", error);
+        showToast("Errore caricamento batch di importazione", 'error');
+    }
+}
+/**
+ * Applica i filtri alla tabella di gestione dei log.
+ */
+function applyLogTableFilters() {
+    const dateFilter = document.getElementById('log-table-filter-date').value;
+    const shipFilter = document.getElementById('log-table-filter-ship').value.toLowerCase();
+    const colorFilter = document.getElementById('log-table-filter-color').value;
+
+    const allLogs = Object.values(tuttiDatiLog).flat();
+
+    const filteredLogs = allLogs.filter(log => {
+        const shipMatch = !shipFilter || log.ship.toLowerCase().includes(shipFilter);
+        const dateMatch = !dateFilter || log.log_timestamp.startsWith(dateFilter);
+        const colorMatch = !colorFilter || log.color_code === colorFilter;
+        return shipMatch && dateMatch && colorMatch;
+    });
+
+    renderLogTable(filteredLogs);
+}
+/**
+ * Seleziona o deseleziona tutte le checkbox nella tabella dei log.
+ * @param {HTMLInputElement} masterCheckbox - La checkbox "seleziona tutto".
+ */
+function toggleSelectAll(masterCheckbox) {
+    const checkboxes = document.querySelectorAll('#log-table-body .log-select-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = masterCheckbox.checked;
+    });
+}
+
+/**
+ * Elimina tutti i log associati a un batch di importazione selezionato.
+ */
+async function deleteSelectedImport() {
+    const importId = document.getElementById('import-select').value;
+    if (!importId) {
+        showToast('Seleziona un batch di importazione da eliminare.', 'error');
+        return;
+    }
+    if (confirm(`Sei sicuro di voler eliminare tutti i log dall'import "${importId}"? L'azione è irreversibile.`)) {
+        await fetch('/api/logs/batch_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ import_id: importId })
+        });
+        // La notifica WebSocket gestirà il ricaricamento
+    }
+}
+
+/**
+ * Elimina tutti i log attualmente selezionati nella tabella.
+ */
+async function deleteSelectedLogs() {
+    const selectedIds = Array.from(document.querySelectorAll('#log-table-body .log-select-checkbox:checked')).map(cb => cb.value);
+    if (selectedIds.length === 0) {
+        showToast('Nessun log selezionato.', 'error');
+        return;
+    }
+    if (confirm(`Sei sicuro di voler eliminare i ${selectedIds.length} log selezionati? L'azione è irreversibile.`)) {
+         await fetch('/api/logs/batch_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ log_ids: selectedIds })
+        });
+        // La notifica WebSocket gestirà il ricaricamento
+    }
+}
+
+/**
+ * Esporta i log attualmente visibili nella tabella in un file CSV.
+ */
+function exportVisibleLogs() {
+    const headers = ["Timestamp", "Box", "Nave", "Colore", "Import ID"];
+    const rows = Array.from(document.querySelectorAll('#log-table-body tr'));
+
+    if (rows.length === 0 || rows[0].cells.length < 2) {
+        showToast('Nessun dato da esportare.', 'info');
+        return;
+    }
+
+    let csvContent = headers.join(";") + "\n";
+    rows.forEach(row => {
+        // Estrae il testo da ogni cella, partendo dalla seconda (indice 1)
+        const rowData = Array.from(row.cells).slice(1).map(cell => `"${cell.innerText.replace(/"/g, '""')}"`);
+        csvContent += rowData.join(";") + "\n";
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "log_visibili_export.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+/**
+ * Resetta i filtri della tabella di gestione log e la ri-renderizza.
+ */
+function resetLogTableFilters() {
+    document.getElementById('log-table-filter-date').value = '';
+    document.getElementById('log-table-filter-ship').value = '';
+    document.getElementById('log-table-filter-color').value = '';
+    document.querySelector('#log-table-body input[type="checkbox"]').checked = false; // Deseleziona il master checkbox
+    renderLogTable();
+}
+
+/**
+ * Renderizza la tabella nel modal di gestione log.
+ * @param {Array} [logs] - Un array opzionale di log da visualizzare. Se non fornito, usa tutti i log globali.
+ */
+function renderLogTable(logs) {
+    const tableBody = document.getElementById('log-table-body');
+    if (!tableBody) return;
+
+    const logList = logs || Object.values(tuttiDatiLog).flat().sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+
+    tableBody.innerHTML = logList.map(log => `
+        <tr data-log-id="${log.id}">
+            <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
+            <td>${log.log_timestamp}</td>
+            <td>${log.box_id}</td>
+            <td>${log.ship}</td>
+            <td><span style="color:${COLOR_MAP[log.color_code] || '#808080'}; font-size: 1.2em; font-weight:bold;">●</span></td>
+            <td>${log.import_id || 'manual'}</td>
+        </tr>
+    `).join('') || '<tr><td colspan="6" style="text-align:center; padding: 15px;">Nessun log trovato.</td></tr>';
+}
+
 function closeAllModals() {
     document.querySelectorAll('.modal-overlay').forEach(modal => modal.classList.remove('visible'));
     closeHistoryPanel();

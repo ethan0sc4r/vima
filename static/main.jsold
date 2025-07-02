@@ -160,7 +160,7 @@ async function disegnaGriglia(bounds) {
 function handleBoxClick(boxId) {
     document.getElementById('boxInput').value = boxId;
     document.getElementById('history-title').innerText = `Storico Box: ${boxId}`;
-    document.getElementById('history-content').innerHTML = `<p>Seleziona un periodo e clicca "Mostra".</p>`;
+    document.getElementById('history-content').innerHTML = `<p style="padding: 15px;">Seleziona un periodo e clicca "Mostra".</p>`;
     const showBtn = document.getElementById('history-show-btn');
     showBtn.onclick = () => renderHistory(boxId);
     openHistoryPanel();
@@ -202,16 +202,14 @@ function renderHistory(boxId) {
 
 function openEditLogModal(log) {
     closeHistoryPanel();
+    const [datePart, timePart] = log.log_timestamp.split(' ');
     document.getElementById('log-modal-title').textContent = 'Modifica Log';
     document.getElementById('log-save-button').textContent = 'Salva Modifiche';
     document.getElementById('logIdInput').value = log.id;
     document.getElementById('boxInput').value = log.box_id;
     document.getElementById('boxInput').readOnly = true;
-    
-    const [datePart, timePart] = log.log_timestamp.split(' ');
     document.getElementById('dateInput').value = datePart;
     document.getElementById('timeInput').value = timePart || '00:00';
-    
     document.getElementById('shipInput').value = log.ship;
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
     openModal('modal-log-entry');
@@ -353,21 +351,11 @@ function processCSV(event) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (e) => {
-        const righe = e.target.result.split('\n');
-        let importati = 0;
-        for (const riga of righe) {
-            if (!riga.trim() || riga.toLowerCase().startsWith('timestamp;box')) continue;
-            const parts = riga.split(';');
-            if (parts.length >= 4) {
-                const [timestamp, boxId, ship, colorCode] = parts.map(p => p.trim());
-                const boxData = { timestamp, boxId: boxId.toUpperCase(), ship, colorCode };
-                if (gridLayers[boxData.boxId]) {
-                    await fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(boxData) });
-                    importati++;
-                }
-            }
-        }
-        showToast(`${importati} righe inviate per l'importazione.`, 'success');
+        await fetch('/api/logs/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: e.target.result
+        });
     };
     reader.readAsText(file);
     event.target.value = '';
@@ -513,6 +501,7 @@ async function caricaSingoloShapefile(layerConfig, layerId, newLoadedLayers) {
 function openDashboard() {
     updateDashboardStats();
     renderTodaysActivityDetail();
+    renderExpiredLogsList();
     createOrUpdateCharts();
     openModal('modal-dashboard');
 }
@@ -523,7 +512,6 @@ function updateDashboardStats() {
     const logsToday = allLogs.filter(log => log.log_timestamp.startsWith(todayString)).length;
     document.getElementById('stat-today').textContent = logsToday;
 }
-
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');
     const todayString = new Date().toISOString().split('T')[0];
@@ -540,50 +528,31 @@ function renderTodaysActivityDetail() {
     container.innerHTML = html;
 }
 function renderExpiredLogsList() {
-    
     const container = document.getElementById('expired-logs-list');
     const expiredBoxes = [];
     const oggi = new Date();
-    oggi.setHours(0, 0, 0, 0); // Normalizza la data di oggi all'inizio della giornata
+    oggi.setHours(0, 0, 0, 0);
 
     for (const boxId in tuttiDatiLog) {
         const logsPerBox = tuttiDatiLog[boxId];
         if (logsPerBox && logsPerBox.length > 0) {
-            // Trova il log più recente per questo box
             const logPiuRecente = logsPerBox.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp))[0];
-            
             const dataBox = new Date(logPiuRecente.log_timestamp);
-            dataBox.setHours(0, 0, 0, 0); // Normalizza anche la data del log per un confronto corretto
-
+            dataBox.setHours(0, 0, 0, 0);
             const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
-
-            // Se la differenza è maggiore di 30 giorni, aggiungilo alla lista
             if (differenzaGiorni > GIORNI_BORDO_ROSSO) {
-                expiredBoxes.push({
-                    boxId: boxId,
-                    log: logPiuRecente
-                });
+                expiredBoxes.push({ boxId: boxId, log: logPiuRecente });
             }
         }
     }
-
     if (expiredBoxes.length === 0) {
         container.innerHTML = '<p style="padding: 10px;">Nessun box scaduto.</p>';
         return;
     }
-
-    // Ordina i box scaduti per ID
     expiredBoxes.sort((a, b) => a.boxId.localeCompare(b.boxId));
-
     let html = '';
     expiredBoxes.forEach(item => {
-        html += `
-            <div class="content-item" style="padding: 10px;">
-                <b>Box: ${item.boxId}</b><br>
-                <small>Ultimo log: ${item.log.log_timestamp}</small><br>
-                <small>Nave: ${item.log.ship}</small>
-            </div>
-        `;
+        html += `<div class="content-item" style="padding: 10px;"><b>Box: ${item.boxId}</b><br><small>Ultimo log: ${item.log.log_timestamp}</small><br><small>Nave: ${item.log.ship}</small></div>`;
     });
     container.innerHTML = html;
 }

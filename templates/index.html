@@ -74,6 +74,13 @@
         .history-table th { background-color: #f2f2f2; }
         .history-table .actions-cell { text-align: center; }
         .history-table .actions-cell span { cursor: pointer; font-size: 18px; margin: 0 5px; }
+        #modal-log-manager { top: 0; left: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; border-radius: 0; }
+        .log-manager-container { display: flex; flex-direction: column; height: 100%; }
+        .log-manager-header { padding: 10px; background-color: #f5f5f5; border-bottom: 1px solid #ccc; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
+        .log-manager-table-container { flex-grow: 1; overflow-y: auto; }
+        .log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .log-table th, .log-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
+        .log-table thead { position: sticky; top: 0; background-color: #e9ecef; z-index: 1; }
     </style>
 </head>
 <body>
@@ -85,12 +92,49 @@
     <div class="fab-container">
         <button class="fab fab-grid" title="Gestione Griglia" onclick="openModal('modal-grid')">▦</button>
         <button class="fab fab-log" title="Aggiungi Log" onclick="openModal('modal-log-entry')">✎</button>
+        <button class="fab" style="background-color: #9E9E9E;" title="Gestione Log Completa" onclick="openLogManager()">🗂️</button>
         <button class="fab fab-dashboard" title="Cruscotto Analitico" onclick="openDashboard()">📊</button>
         <button class="fab fab-data" title="Import/Export Dati" onclick="openModal('modal-data-manage')">💾</button>
         <button class="fab fab-filter" title="Filtri Visualizzazione" onclick="openModal('modal-filter')">▼</button>
         <button class="fab fab-layers" title="Gestione Layer" onclick="openLayerManager()">📜</button>
     </div>
-
+    <div id="modal-log-manager" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <div class="log-manager-container">
+                <h4>Gestione Log Completa</h4>
+                <div class="log-manager-header">
+                    <input type="date" id="log-table-filter-date" onchange="applyLogTableFilters()">
+                    <input type="text" id="log-table-filter-ship" placeholder="Filtra per nave..." onkeyup="applyLogTableFilters()">
+                    <select id="log-table-filter-color" onchange="applyLogTableFilters()"><option value="">Tutti i Colori</option><option value="1">Rosso</option><option value="2">Blu</option><option value="3">Verde</option></select>
+                    <button class="btn-reset" onclick="resetLogTableFilters()">Pulisci Filtri</button>
+                    <div style="flex-grow: 1;"></div>
+                    <div id="import-manager" style="display:flex; gap:10px; align-items:center;">
+                        <label for="import-select">Elimina Batch:</label>
+                        <select id="import-select"></select>
+                        <button class="btn-reset" onclick="deleteSelectedImport()">Elimina Import</button>
+                    </div>
+                    <button class="btn-export-log" onclick="exportVisibleLogs()">Esporta Visibili</button>
+                    <button class="btn-reset" onclick="deleteSelectedLogs()">Cancella Selezionati</button>
+                </div>
+                <div class="log-manager-table-container">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" onchange="toggleSelectAll(this)"></th>
+                                <th>Data/Ora</th>
+                                <th>Box</th>
+                                <th>Nave</th>
+                                <th>Colore</th>
+                                <th>Import ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="log-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
     <div id="history-panel" class="side-panel right">
         <div class="panel-header">
             <span class="close-btn" onclick="closeHistoryPanel()">&times;</span>
