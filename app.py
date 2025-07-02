@@ -10,7 +10,7 @@ from datetime import datetime
 # --- CONFIGURAZIONE ---
 app = Flask(__name__)
 sock = Sock(app)
-DATABASE = 'database.db'
+DATABASE = 'storage/database.db'
 CONFIG_FILE = 'config.json'
 clients = []
 
