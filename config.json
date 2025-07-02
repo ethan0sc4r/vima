@@ -5,17 +5,6 @@
     },
     "external_layers": [
         {
-            "name": "ARETUSA",
-            "style": {
-                "color": "#ff8c00",
-                "fillColor": "#ff8c00",
-                "fillOpacity": 0.2,
-                "weight": 2
-            },
-            "type": "shp",
-            "url": "/static/shapefiles/ARETUSA.ZIP"
-        },
-        {
             "format": "image/png",
             "layers": "EL.BATIMETRICA.",
             "name": "Batimetria",
@@ -31,18 +20,12 @@
         }
     ],
     "grid_bounds": {
-        "lat_end": 40,
-        "lat_start": 46.5,
-        "lon_end": 20,
-        "lon_start": 12
+        "lat_end": 32,
+        "lat_start": 46,
+        "lon_end": 24,
+        "lon_start": 5.7
     },
     "wms_layers": [
-        {
-            "format": "image/png",
-            "layers": "lay",
-            "name": "test",
-            "transparent": true,
-            "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Rete_ferroviaria.map&service=wms"
-        }
+        
     ]
 }
