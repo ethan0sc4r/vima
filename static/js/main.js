@@ -917,22 +917,56 @@ async function caricaLogIniziali() {
     } catch(e) { console.error("Impossibile caricare dati log:", e); }
 }
 function connectWebSocket() {
-    const ws_url = `ws://${window.location.host}/ws`;
+    // Scegli il protocollo corretto (wss per https, ws per http)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws_url = `${protocol}//${window.location.host}/ws`;
+
+    console.log(`Tentativo di connessione a WebSocket: ${ws_url}`); // Utile per il debug
+
     const ws = new WebSocket(ws_url);
+
     ws.onmessage = function(event) {
         const message = JSON.parse(event.data);
+        console.log("WebSocket message received:", message);
+
+        if (message.type === 'config_updated' || message.type === 'full_reload_needed' || message.type === 'logs_reset') {
+            const reloadMsg = {
+                'config_updated': "Configurazione aggiornata. Ricaricamento in corso...",
+                'full_reload_needed': "Dati aggiornati sul server. Ricaricamento in corso...",
+                'logs_reset': "Tutti i log sono stati resettati. Ricaricamento in corso..."
+            }[message.type];
+            
+            showToast(reloadMsg, 'info');
+            setTimeout(() => window.location.reload(), 1500);
+            return; 
+        }
+
         if (message.type === 'box_history_updated') {
             tuttiDatiLog[message.boxId] = message.data;
-        } else if (message.type === 'logs_reset') {
-            tuttiDatiLog = {};
-        } else if (message.type === 'config_updated') {
-            showToast("Configurazione aggiornata. Ricaricamento in corso...", 'info');
-            setTimeout(() => window.location.reload(), 1500);
-            return;
         }
+      
+        // Re-renderizza stili e aggiorna i dashboard se sono aperti
         renderizzaStili();
+        if (document.getElementById('modal-dashboard').classList.contains('visible')) {
+             updateDashboardStats();
+             renderTodaysActivityDetail();
+             renderExpiredLogsList();
+             createOrUpdateCharts();
+        }
+        if (document.getElementById('modal-log-manager').classList.contains('visible')) {
+             renderLogTable();
+        }
     };
-    ws.onclose = () => setTimeout(connectWebSocket, 5000);
+
+    ws.onclose = () => {
+        console.log("WebSocket disconnesso. Riconnessione tra 5 secondi...");
+        setTimeout(connectWebSocket, 5000);
+    };
+    
+    ws.onerror = (err) => {
+        console.error("Errore WebSocket:", err);
+        ws.close();
+    };
 }
 async function inizializzaApplicazione() {
     document.getElementById('dateInput').valueAsDate = new Date();
