@@ -1,3 +1,4 @@
+// --- 1. DICHIARAZIONE GLOBALE ---
 let map;
 let layerControl;
 let gridLayerGroup;
@@ -350,10 +351,6 @@ function processCSV(event) {
 }
 
 // --- 7. GESTIONE LAYER ESTERNI ---
-function openLayerManager() {
-    renderLayerManagerList();
-    document.getElementById('layer-manager-panel').classList.add('visible');
-}
 function renderLayerManagerList() {
     const container = document.getElementById('layer-list-container');
     container.innerHTML = '';
@@ -367,7 +364,7 @@ function renderLayerManagerList() {
             const item = document.createElement('div');
             item.className = 'layer-item';
             item.innerHTML = `
-                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${map.hasLayer(loadedExternalLayers[layerId]) ? '�️' : '⚪'}</span>
+                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${map.hasLayer(loadedExternalLayers[layerId]) ? '👁️' : '⚪'}</span>
                 <div class="reorder-arrows"><span onclick="reorderLayer(${index}, -1)">▲</span><span onclick="reorderLayer(${index}, 1)">▼</span></div>
                 <span class="layer-name">${layer.name} (${layer.type.toUpperCase()})</span>
                 <div class="layer-actions"><span title="Modifica Layer" onclick="openEditLayerModal(${index})">✎</span><span title="Cancella Layer" onclick="deleteLayer(${index})">🗑️</span></div>`;
@@ -422,16 +419,42 @@ async function saveLayer() {
         type: document.getElementById('layer-type').value,
         name: document.getElementById('layer-name').value,
         url: document.getElementById('layer-url').value,
-        style: { color: document.getElementById('layer-color').value, weight: parseInt(document.getElementById('layer-weight').value, 10), fillColor: document.getElementById('layer-color').value, fillOpacity: 0.2 }
+        style: { 
+            color: document.getElementById('layer-color').value, 
+            weight: parseInt(document.getElementById('layer-weight').value, 10), 
+            fillColor: document.getElementById('layer-color').value, 
+            fillOpacity: 0.2 
+        }
     };
+    
     if (layerData.type === 'wms') {
         layerData.layers = document.getElementById('wms-layers').value;
         layerData.format = 'image/png';
         layerData.transparent = true;
     }
-    if (!layerData.name || !layerData.url || (layerData.type === 'wms' && !layerData.layers)) { showToast("Tutti i campi per questo tipo di layer sono obbligatori.", 'error'); return; }
+    
+    // Validazione specifica per shapefile
+    if (layerData.type === 'shp') {
+        const validation = validateShapefileUrl(layerData.url);
+        if (!validation.valid) {
+            showToast(validation.message, 'error');
+            return;
+        }
+    }
+    
+    if (!layerData.name || !layerData.url || (layerData.type === 'wms' && !layerData.layers)) { 
+        showToast("Tutti i campi per questo tipo di layer sono obbligatori.", 'error'); 
+        return; 
+    }
+    
     if (!config.external_layers) config.external_layers = [];
-    if (index === -1) { config.external_layers.push(layerData); } else { config.external_layers[index] = layerData; }
+    
+    if (index === -1) { 
+        config.external_layers.push(layerData); 
+    } else { 
+        config.external_layers[index] = layerData; 
+    }
+    
     await saveConfigAndReload();
 }
 async function deleteLayer(index) {
@@ -446,33 +469,149 @@ async function saveConfigAndReload() {
     setTimeout(() => window.location.reload(), 1500);
 }
 function loadExternalLayers() {
+    // Rimuovi layer esistenti
     for (const key in loadedExternalLayers) {
         if (map.hasLayer(loadedExternalLayers[key])) map.removeLayer(loadedExternalLayers[key]);
         if (layerControl) layerControl.removeLayer(loadedExternalLayers[key]);
     }
+    
     const newLoadedLayers = {};
+    
     if (config.external_layers) {
         config.external_layers.forEach((layerConfig, index) => {
             const layerId = `${layerConfig.type}-${index}`;
             let layer;
+            
             if (layerConfig.type === 'wms') {
                 const proxyUrl = `/api/wms_proxy`;
-                layer = L.tileLayer.wms(proxyUrl, { ...layerConfig, pane: 'shapefilePane', wms_server_url: layerConfig.url, version: '1.3.0', crs: L.CRS.EPSG4326 });
-            } else if (layerConfig.type === 'shp') {
-                layer = L.shpfile(layerConfig.url, { pane: 'shapefilePane', style: () => layerConfig.style });
-            } else if (layerConfig.type === 'geojson') {
-                layer = L.geoJSON(null, { pane: 'shapefilePane', style: () => layerConfig.style });
-                fetch(layerConfig.url).then(res => res.json()).then(data => layer.addData(data));
+                layer = L.tileLayer.wms(proxyUrl, { 
+                    ...layerConfig, 
+                    pane: 'shapefilePane', 
+                    wms_server_url: layerConfig.url, 
+                    version: '1.3.0', 
+                    crs: L.CRS.EPSG4326 
+                });
+            } 
+            else if (layerConfig.type === 'shp') {
+                // SOLUZIONE 1: Usa shp.js
+                loadShapefileWithShpJs(layerConfig, layerId, newLoadedLayers);
+            } 
+            else if (layerConfig.type === 'geojson') {
+                layer = L.geoJSON(null, { 
+                    pane: 'shapefilePane', 
+                    style: () => layerConfig.style,
+                    onEachFeature: function(feature, layer) {
+                        if (feature.properties) {
+                            let popupContent = '<b>Proprietà:</b><br>';
+                            for (const [key, value] of Object.entries(feature.properties)) {
+                                popupContent += `<b>${key}:</b> ${value}<br>`;
+                            }
+                            layer.bindPopup(popupContent);
+                        }
+                    }
+                });
+                
+                fetch(layerConfig.url)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                        return res.json();
+                    })
+                    .then(data => {
+                        layer.addData(data);
+                        showToast(`GeoJSON "${layerConfig.name}" caricato con successo`, 'success');
+                    })
+                    .catch(error => {
+                        console.error(`Errore caricamento GeoJSON ${layerConfig.name}:`, error);
+                        showToast(`Errore caricamento GeoJSON "${layerConfig.name}": ${error.message}`, 'error');
+                    });
             }
-            if(layer) {
+            
+            if (layer) {
                 newLoadedLayers[layerId] = layer;
-                if (layerControl) layerControl.addOverlay(layer, layerConfig.name);
+                if (layerControl) {
+                    layerControl.addOverlay(layer, layerConfig.name);
+                }
             }
         });
     }
+    
     loadedExternalLayers = newLoadedLayers;
 }
-
+function loadShapefileWithShpJs(layerConfig, layerId, newLoadedLayers) {
+    // Verifica che shp sia disponibile
+    if (typeof shp === 'undefined') {
+        console.error('shp.js non è caricato. Aggiungi: <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>');
+        showToast(`Impossibile caricare ${layerConfig.name}: libreria shp.js mancante`, 'error');
+        return;
+    }
+    
+    console.log(`Caricamento shapefile: ${layerConfig.name} da ${layerConfig.url}`);
+    showToast(`Caricamento shapefile "${layerConfig.name}" in corso...`, 'info');
+    
+    // Carica il file shapefile
+    shp(layerConfig.url)
+        .then(function(geojson) {
+            console.log(`Shapefile ${layerConfig.name} convertito in GeoJSON:`, geojson);
+            
+            // Crea il layer GeoJSON dal shapefile
+            const layer = L.geoJSON(geojson, {
+                pane: 'shapefilePane',
+                style: function(feature) {
+                    return layerConfig.style;
+                },
+                onEachFeature: function(feature, layer) {
+                    if (feature.properties) {
+                        let popupContent = '<b>Proprietà Shapefile:</b><br>';
+                        for (const [key, value] of Object.entries(feature.properties)) {
+                            if (value !== null && value !== undefined && value !== '') {
+                                popupContent += `<b>${key}:</b> ${value}<br>`;
+                            }
+                        }
+                        layer.bindPopup(popupContent);
+                    }
+                }
+            });
+            
+            // Aggiungi il layer alla mappa
+            newLoadedLayers[layerId] = layer;
+            if (layerControl) {
+                layerControl.addOverlay(layer, layerConfig.name);
+            }
+            
+            // Aggiorna il riferimento globale
+            loadedExternalLayers[layerId] = layer;
+            
+            showToast(`Shapefile "${layerConfig.name}" caricato con successo!`, 'success');
+            
+            // Opzionale: centra la mappa sul layer
+            if (layer.getBounds && layer.getBounds().isValid()) {
+                // map.fitBounds(layer.getBounds());
+            }
+        })
+        .catch(function(error) {
+            console.error(`Errore caricamento shapefile ${layerConfig.name}:`, error);
+            showToast(`Errore caricamento shapefile "${layerConfig.name}": ${error.message || 'Errore sconosciuto'}`, 'error');
+        });
+}
+function validateShapefileUrl(url) {
+    // Verifica che l'URL punti a un file ZIP
+    if (!url.toLowerCase().endsWith('.zip')) {
+        return {
+            valid: false,
+            message: 'Gli shapefile devono essere in formato ZIP contenente i file .shp, .shx, .dbf'
+        };
+    }
+    
+    try {
+        new URL(url);
+        return { valid: true };
+    } catch {
+        return {
+            valid: false,
+            message: 'URL non valido'
+        };
+    }
+}
 // --- 8. DASHBOARD ---
 function openDashboard() {
     updateDashboardStats();
@@ -484,8 +623,8 @@ function updateDashboardStats() {
     const allLogs = Object.values(tuttiDatiLog).flat();
     document.getElementById('stat-total-logs').textContent = allLogs.length;
     const todayString = new Date().toISOString().split('T')[0];
-    const logsToday = allLogs.filter(log => log.log_date === todayString).length;
-    document.getElementById('stat-today').textContent = logsToday;
+    const logsToday = allLogs.find(log => log.log_date === todayString);
+    document.getElementById('stat-today').textContent = logsToday ? logsToday.length : 0;
 }
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');

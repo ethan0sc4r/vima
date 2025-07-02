@@ -5,18 +5,29 @@
     },
     "external_layers": [
         {
-            "type": "wms",
-            "name": "Batimetria",
-            "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Batimetrica.map",
+            "name": "ARETUSA",
             "style": {
                 "color": "#ff8c00",
-                "weight": 2,
                 "fillColor": "#ff8c00",
-                "fillOpacity": 0.2
+                "fillOpacity": 0.2,
+                "weight": 2
             },
-            "layers": "EL.BATIMETRICA.",
+            "type": "shp",
+            "url": "/static/shapefiles/ARETUSA.ZIP"
+        },
+        {
             "format": "image/png",
-            "transparent": true
+            "layers": "EL.BATIMETRICA.",
+            "name": "Batimetria",
+            "style": {
+                "color": "#ff8c00",
+                "fillColor": "#ff8c00",
+                "fillOpacity": 0.2,
+                "weight": 2
+            },
+            "transparent": true,
+            "type": "wms",
+            "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Batimetrica.map"
         }
     ],
     "grid_bounds": {
