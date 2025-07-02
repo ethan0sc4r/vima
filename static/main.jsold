@@ -6,7 +6,7 @@ let tuttiDatiLog = {};
 let gridLayers = {};
 let config = {};
 let colorChartInstance = null, shipChartInstance = null;
-let loadedExternalLayers = {}; // Oggetto per memorizzare i layer Leaflet
+let loadedExternalLayers = {};
 
 // Costanti globali
 const boxSize = 10 / 60;
@@ -17,7 +17,7 @@ const BORDO_VERDE = "#66BB6A", BORDO_GIALLO = "#FFEE58", BORDO_ROSSO = "#EF5350"
 const COLOR_MAP = { '1': '#f44336', '2': '#2196F3', '3': '#4CAF50' };
 
 
-// --- 2. LOGICA MODALI, PANNELLI E HELPERS ---
+// --- 2. LOGICA MODALI, PANNELLI E NOTIFICHE ---
 function openModal(modalId) {
     if (modalId === 'modal-log-entry') {
         document.getElementById('log-modal-title').textContent = 'Aggiungi Log';
@@ -31,11 +31,18 @@ function openModal(modalId) {
         if(boxInput) boxInput.readOnly = false;
         
         const logForm = document.getElementById('log-form');
-        if (logForm) {
-            logForm.reset();
-        }
+        if (logForm) logForm.reset();
+        
         const dateInput = document.getElementById('dateInput');
         if(dateInput) dateInput.valueAsDate = new Date();
+
+        const timeInput = document.getElementById('timeInput');
+        if(timeInput) {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            timeInput.value = `${hours}:${minutes}`;
+        }
     }
     const modal = document.getElementById(modalId);
     if(modal) modal.classList.add('visible');
@@ -108,19 +115,17 @@ async function disegnaGriglia(bounds) {
     let boundsToDraw = bounds;
     if (!boundsToDraw) {
         boundsToDraw = {
-            latStart: parseFloat(document.getElementById('lat_start').value),
-            lonStart: parseFloat(document.getElementById('lon_start').value),
-            latEnd: parseFloat(document.getElementById('lat_end').value),
-            lonEnd: parseFloat(document.getElementById('lon_end').value)
+            lat_start: parseFloat(document.getElementById('lat_start').value),
+            lon_start: parseFloat(document.getElementById('lon_start').value),
+            lat_end: parseFloat(document.getElementById('lat_end').value),
+            lon_end: parseFloat(document.getElementById('lon_end').value)
         };
-        if (Object.values(boundsToDraw).some(isNaN)) { showToast("Coordinate non valide.", 'error'); return; }
-        config.grid_bounds = {
-            lat_start: boundsToDraw.latStart,
-            lon_start: boundsToDraw.lonStart,
-            lat_end: boundsToDraw.latEnd,
-            lon_end: boundsToDraw.lonEnd
-        };
-        await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
+        if (Object.values(boundsToDraw).some(isNaN)) {
+            showToast("Coordinate non valide.", 'error');
+            return;
+        }
+        const newConfig = { ...config, grid_bounds: boundsToDraw };
+        await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newConfig) });
     }
     
     gridLayerGroup.clearLayers();
@@ -165,27 +170,34 @@ function renderHistory(boxId) {
     const historyContent = document.getElementById('history-content');
     const years = parseInt(document.getElementById('history-years').value, 10);
     if (isNaN(years) || years < 1) { showToast("Inserisci un numero di anni valido.", 'error'); return; }
-    const logsForBox = [...(tuttiDatiLog[boxId] || [])].sort((a, b) => new Date(b.log_date) - new Date(a.log_date));
-    if (logsForBox.length === 0) { historyContent.innerHTML = "<p>Nessun log trovato per questo box.</p>"; return; }
+    const logsForBox = [...(tuttiDatiLog[boxId] || [])].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+    if (logsForBox.length === 0) {
+        historyContent.innerHTML = '<table class="history-table"><tr><td>Nessun log per questo box.</td></tr></table>';
+        return;
+    }
     const cutoffDate = new Date();
     cutoffDate.setFullYear(cutoffDate.getFullYear() - years);
-    const filteredLogs = logsForBox.filter(log => new Date(log.log_date) >= cutoffDate);
-    if (filteredLogs.length === 0) { historyContent.innerHTML = `<p>Nessun log trovato negli ultimi ${years} anni.</p>`; return; }
-    let html = '';
+    const filteredLogs = logsForBox.filter(log => new Date(log.log_timestamp.split(' ')[0]) >= cutoffDate);
+    if (filteredLogs.length === 0) {
+        historyContent.innerHTML = `<p style='padding: 15px;'>Nessun log trovato negli ultimi ${years} anni.</p>`;
+        return;
+    }
+    let tableHTML = `<table class="history-table"><thead><tr><th>Data/Ora</th><th>Nave</th><th>Colore</th><th>Azioni</th></tr></thead><tbody>`;
     filteredLogs.forEach(log => {
-        html += `
-            <div class="history-item">
-                <div style="float: right;">
-                    <span style="cursor:pointer; font-size: 18px;" title="Modifica Log" onclick='openEditLogModal(${JSON.stringify(log)})'>✎</span>
-                    <span style="cursor:pointer; font-size: 18px;" title="Cancella Log" onclick='deleteLog(${log.id}, "${log.box_id}")'>🗑️</span>
-                </div>
-                <b>Data:</b> ${log.log_date}<br>
-                <b>Nave:</b> ${log.ship}<br>
-                <b>Colore:</b> <span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span>
-            </div>
+        tableHTML += `
+            <tr>
+                <td>${log.log_timestamp}</td>
+                <td>${log.ship}</td>
+                <td><span style="color:${COLOR_MAP[log.color_code]}; font-size: 20px; font-weight:bold;">●</span></td>
+                <td class="actions-cell">
+                    <span title="Modifica Log" onclick='openEditLogModal(${JSON.stringify(log)})'>✎</span>
+                    <span title="Cancella Log" onclick='deleteLog(${log.id}, "${log.box_id}")'>🗑️</span>
+                </td>
+            </tr>
         `;
     });
-    historyContent.innerHTML = html;
+    tableHTML += `</tbody></table>`;
+    historyContent.innerHTML = tableHTML;
 }
 
 function openEditLogModal(log) {
@@ -195,7 +207,11 @@ function openEditLogModal(log) {
     document.getElementById('logIdInput').value = log.id;
     document.getElementById('boxInput').value = log.box_id;
     document.getElementById('boxInput').readOnly = true;
-    document.getElementById('dateInput').value = log.log_date;
+    
+    const [datePart, timePart] = log.log_timestamp.split(' ');
+    document.getElementById('dateInput').value = datePart;
+    document.getElementById('timeInput').value = timePart || '00:00';
+    
     document.getElementById('shipInput').value = log.ship;
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
     openModal('modal-log-entry');
@@ -213,13 +229,16 @@ async function deleteLog(logId, boxId) {
 
 async function saveLog() {
     const logId = document.getElementById('logIdInput').value;
+    const date = document.getElementById('dateInput').value;
+    const time = document.getElementById('timeInput').value;
     const boxData = {
         boxId: document.getElementById('boxInput').value.toUpperCase(),
-        date: document.getElementById('dateInput').value,
+        timestamp: `${date} ${time}`,
         ship: document.getElementById('shipInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
-    if (!boxData.boxId || !boxData.date || !boxData.ship) { showToast("Tutti i campi sono obbligatori.", 'error'); return; }
+    if (!boxData.boxId || !date || !time || !boxData.ship) { showToast("ID Box, Data, Ora e Nave sono campi obbligatori.", 'error'); return; }
+    if (!gridLayers[boxData.boxId]) { showToast(`L'ID Box "${boxData.boxId}" non esiste sulla mappa.`, 'error'); return; }
     
     const url = logId ? `/api/logs/${logId}` : '/api/logs';
     const method = logId ? 'PUT' : 'POST';
@@ -242,15 +261,16 @@ function renderizzaStili(filtro = null) {
             layer.setStyle(styleDefault).setTooltipContent(defaultTooltip);
             continue;
         }
-        const logsOrdinati = [...logsPerBox].sort((a, b) => new Date(b.log_date) - new Date(a.log_date));
+        const logsOrdinati = [...logsPerBox].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
         const logsFiltrati = logsOrdinati.filter(data => {
             if (!filtro) return true;
             let mostra = true;
-            if (filtro.data && data.log_date !== filtro.data) mostra = false;
+            if (filtro.data && !data.log_timestamp.startsWith(filtro.data)) mostra = false;
             if (filtro.nave && !data.ship.toLowerCase().includes(filtro.nave.toLowerCase())) mostra = false;
             if (filtro.colore && data.color_code !== filtro.colore) mostra = false;
             if (filtro.stato && mostra) {
-                const oggi = new Date(); const dataBox = new Date(data.log_date);
+                const oggi = new Date(); oggi.setHours(0,0,0,0);
+                const dataBox = new Date(data.log_timestamp); dataBox.setHours(0,0,0,0);
                 const diffGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
                 if (filtro.stato === 'ok' && diffGiorni > GIORNI_BORDO_GIALLO) mostra = false;
                 if (filtro.stato === 'warning' && (diffGiorni <= GIORNI_BORDO_GIALLO || diffGiorni > GIORNI_BORDO_ROSSO)) mostra = false;
@@ -263,14 +283,15 @@ function renderizzaStili(filtro = null) {
             continue;
         }
         const logPiuRecente = logsFiltrati[0];
-        const oggi = new Date(); const dataBox = new Date(logPiuRecente.log_date);
+        const oggi = new Date(); oggi.setHours(0,0,0,0);
+        const dataBox = new Date(logPiuRecente.log_timestamp); dataBox.setHours(0,0,0,0);
         const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
         let borderColor;
         if (differenzaGiorni > GIORNI_BORDO_ROSSO) borderColor = BORDO_ROSSO;
         else if (differenzaGiorni > GIORNI_BORDO_GIALLO) borderColor = BORDO_GIALLO;
         else borderColor = BORDO_VERDE;
         layer.setStyle({ fillColor: COLOR_MAP[logPiuRecente.color_code] || '#808080', color: borderColor, weight: 2, fillOpacity: 0.5, opacity: 1 });
-        let tooltipContent = `<b>Box:</b> ${boxId} (${logsOrdinati.length} log)<hr><i>Log più recente:</i><br><b>Data:</b> ${logPiuRecente.log_date}<br><b>Nave:</b> ${logPiuRecente.ship}`;
+        let tooltipContent = `<b>Box:</b> ${boxId} (${logsOrdinati.length} log)<hr><i>Log più recente:</i><br><b>Data/Ora:</b> ${logPiuRecente.log_timestamp}<br><b>Nave:</b> ${logPiuRecente.ship}`;
         layer.setTooltipContent(tooltipContent);
         layer.bringToFront();
     }
@@ -319,10 +340,10 @@ function triggerCSVDownload(csvContent, fileName) {
 function esportaLogCSV() {
     const boxIds = Object.keys(tuttiDatiLog);
     if (boxIds.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
-    let csvContent = "Data;Box;Nave;Colore\n";
+    let csvContent = "Timestamp;Box;Nave;Colore\n";
     boxIds.forEach(boxId => {
         tuttiDatiLog[boxId].forEach(data => {
-            csvContent += `${data.log_date};${boxId};${data.ship};${data.color_code}\n`;
+            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code}\n`;
         });
     });
     triggerCSVDownload(csvContent, "mappa_log_export.csv");
@@ -335,10 +356,11 @@ function processCSV(event) {
         const righe = e.target.result.split('\n');
         let importati = 0;
         for (const riga of righe) {
-            if (!riga.trim() || riga.toLowerCase().startsWith('data;box')) continue;
+            if (!riga.trim() || riga.toLowerCase().startsWith('timestamp;box')) continue;
             const parts = riga.split(';');
             if (parts.length >= 4) {
-                const boxData = { date: parts[0].trim(), boxId: parts[1].trim().toUpperCase(), ship: parts[2].trim(), colorCode: parts[3].trim() };
+                const [timestamp, boxId, ship, colorCode] = parts.map(p => p.trim());
+                const boxData = { timestamp, boxId: boxId.toUpperCase(), ship, colorCode };
                 if (gridLayers[boxData.boxId]) {
                     await fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(boxData) });
                     importati++;
@@ -353,10 +375,6 @@ function processCSV(event) {
 }
 
 // --- 7. GESTIONE LAYER ESTERNI ---
-function openLayerManager() {
-    renderLayerManagerList();
-    openModal('modal-layer-manager');
-}
 function renderLayerManagerList() {
     const container = document.getElementById('layer-list-container');
     container.innerHTML = '';
@@ -453,25 +471,41 @@ function loadExternalLayers() {
         if (map.hasLayer(loadedExternalLayers[key])) map.removeLayer(loadedExternalLayers[key]);
         if (layerControl) layerControl.removeLayer(loadedExternalLayers[key]);
     }
-    loadedExternalLayers = {};
+    const newLoadedLayers = {};
     if (config.external_layers) {
         config.external_layers.forEach((layerConfig, index) => {
             const layerId = `${layerConfig.type}-${index}`;
             let layer;
             if (layerConfig.type === 'wms') {
-                layer = L.tileLayer.wms(layerConfig.url, { ...layerConfig, pane: 'shapefilePane' });
+                const proxyUrl = `/api/wms_proxy`;
+                layer = L.tileLayer.wms(proxyUrl, { ...layerConfig, pane: 'shapefilePane', wms_server_url: layerConfig.url, version: '1.3.0', crs: L.CRS.EPSG4326 });
             } else if (layerConfig.type === 'shp') {
-                layer = L.shpfile(layerConfig.url, { pane: 'shapefilePane', style: () => layerConfig.style });
+                caricaSingoloShapefile(layerConfig, layerId, newLoadedLayers);
             } else if (layerConfig.type === 'geojson') {
                 layer = L.geoJSON(null, { pane: 'shapefilePane', style: () => layerConfig.style });
                 fetch(layerConfig.url).then(res => res.json()).then(data => layer.addData(data));
             }
             if(layer) {
-                loadedExternalLayers[layerId] = layer;
-                layer.addTo(map);
+                newLoadedLayers[layerId] = layer;
                 if (layerControl) layerControl.addOverlay(layer, layerConfig.name);
             }
         });
+    }
+    loadedExternalLayers = newLoadedLayers;
+}
+async function caricaSingoloShapefile(layerConfig, layerId, newLoadedLayers) {
+    try {
+        const response = await fetch(layerConfig.url);
+        if (!response.ok) throw new Error(`Errore di rete: ${response.statusText}`);
+        const buffer = await response.arrayBuffer();
+        const shpLayer = L.shpfile(buffer, { pane: 'shapefilePane', style: () => layerConfig.style });
+        shpLayer.on('load', () => {
+            if (layerControl) layerControl.addOverlay(shpLayer, layerConfig.name);
+            newLoadedLayers[layerId] = shpLayer;
+        });
+        shpLayer.addTo(map);
+    } catch (error) {
+        console.error(`Fallimento nel caricamento di '${layerConfig.name}':`, error);
     }
 }
 
@@ -486,20 +520,70 @@ function updateDashboardStats() {
     const allLogs = Object.values(tuttiDatiLog).flat();
     document.getElementById('stat-total-logs').textContent = allLogs.length;
     const todayString = new Date().toISOString().split('T')[0];
-    const logsToday = allLogs.filter(log => log.log_date === todayString).length;
+    const logsToday = allLogs.filter(log => log.log_timestamp.startsWith(todayString)).length;
     document.getElementById('stat-today').textContent = logsToday;
 }
+
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');
     const todayString = new Date().toISOString().split('T')[0];
-    const logsToday = Object.values(tuttiDatiLog).flat().filter(log => log.log_date === todayString);
+    const logsToday = Object.values(tuttiDatiLog).flat().filter(log => log.log_timestamp.startsWith(todayString));
     if (logsToday.length === 0) {
         container.innerHTML = "<p>Nessuna attività registrata oggi.</p>";
         return;
     }
     let html = '';
     logsToday.sort((a,b) => a.box_id.localeCompare(b.box_id)).forEach(log => {
-        html += `<div class="history-item" style="padding: 5px 0;"><span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b>.</div>`;
+        const timePart = log.log_timestamp.split(' ')[1] || '';
+        html += `<div class="content-item" style="padding: 5px 10px;"><span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.</div>`;
+    });
+    container.innerHTML = html;
+}
+function renderExpiredLogsList() {
+    
+    const container = document.getElementById('expired-logs-list');
+    const expiredBoxes = [];
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0); // Normalizza la data di oggi all'inizio della giornata
+
+    for (const boxId in tuttiDatiLog) {
+        const logsPerBox = tuttiDatiLog[boxId];
+        if (logsPerBox && logsPerBox.length > 0) {
+            // Trova il log più recente per questo box
+            const logPiuRecente = logsPerBox.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp))[0];
+            
+            const dataBox = new Date(logPiuRecente.log_timestamp);
+            dataBox.setHours(0, 0, 0, 0); // Normalizza anche la data del log per un confronto corretto
+
+            const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
+
+            // Se la differenza è maggiore di 30 giorni, aggiungilo alla lista
+            if (differenzaGiorni > GIORNI_BORDO_ROSSO) {
+                expiredBoxes.push({
+                    boxId: boxId,
+                    log: logPiuRecente
+                });
+            }
+        }
+    }
+
+    if (expiredBoxes.length === 0) {
+        container.innerHTML = '<p style="padding: 10px;">Nessun box scaduto.</p>';
+        return;
+    }
+
+    // Ordina i box scaduti per ID
+    expiredBoxes.sort((a, b) => a.boxId.localeCompare(b.boxId));
+
+    let html = '';
+    expiredBoxes.forEach(item => {
+        html += `
+            <div class="content-item" style="padding: 10px;">
+                <b>Box: ${item.boxId}</b><br>
+                <small>Ultimo log: ${item.log.log_timestamp}</small><br>
+                <small>Nave: ${item.log.ship}</small>
+            </div>
+        `;
     });
     container.innerHTML = html;
 }
@@ -569,7 +653,7 @@ async function inizializzaApplicazione() {
         gridLayerGroup = L.featureGroup().addTo(map);
         const baseLayers = { "Mappa Base": baseMapLayer };
         const overlayLayers = { "Griglia Interattiva": gridLayerGroup };
-        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: false }).addTo(map);
+        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);
         
         map.createPane('shapefilePane');
         map.getPane('shapefilePane').style.zIndex = 390;

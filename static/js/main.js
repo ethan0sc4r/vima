@@ -22,6 +22,11 @@ function openModal(modalId) {
     if (modalId === 'modal-log-entry') {
         document.getElementById('log-modal-title').textContent = 'Aggiungi Log';
         const saveButton = document.getElementById('log-save-button');
+        const timeInput = document.getElementById('timeInput');
+        if(timeInput) {
+            const now = new Date();
+            timeInput.value = now.toTimeString().slice(0,5); 
+        }
         if(saveButton) saveButton.textContent = 'Aggiungi Log';
         
         const logIdInput = document.getElementById('logIdInput');
@@ -152,7 +157,7 @@ async function disegnaGriglia(bounds) {
 function handleBoxClick(boxId) {
     document.getElementById('boxInput').value = boxId;
     document.getElementById('history-title').innerText = `Storico Box: ${boxId}`;
-    document.getElementById('history-content').innerHTML = `<p>Seleziona un periodo e clicca "Mostra".</p>`;
+    document.getElementById('history-content').innerHTML = `<p style="padding: 15px;">Seleziona un periodo e clicca "Mostra".</p>`;
     const showBtn = document.getElementById('history-show-btn');
     showBtn.onclick = () => renderHistory(boxId);
     openHistoryPanel();
@@ -162,37 +167,67 @@ function renderHistory(boxId) {
     const historyContent = document.getElementById('history-content');
     const years = parseInt(document.getElementById('history-years').value, 10);
     if (isNaN(years) || years < 1) { showToast("Inserisci un numero di anni valido.", 'error'); return; }
-    const logsForBox = [...(tuttiDatiLog[boxId] || [])].sort((a, b) => new Date(b.log_date) - new Date(a.log_date));
-    if (logsForBox.length === 0) { historyContent.innerHTML = "<p>Nessun log trovato per questo box.</p>"; return; }
+    
+    const logsForBox = [...(tuttiDatiLog[boxId] || [])].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+    if (logsForBox.length === 0) {
+        historyContent.innerHTML = "<p style='padding: 15px;'>Nessun log trovato per questo box.</p>";
+        return;
+    }
+
     const cutoffDate = new Date();
     cutoffDate.setFullYear(cutoffDate.getFullYear() - years);
-    const filteredLogs = logsForBox.filter(log => new Date(log.log_date) >= cutoffDate);
-    if (filteredLogs.length === 0) { historyContent.innerHTML = `<p>Nessun log trovato negli ultimi ${years} anni.</p>`; return; }
-    let html = '';
+    const filteredLogs = logsForBox.filter(log => new Date(log.log_timestamp.split(' ')[0]) >= cutoffDate);
+    
+    if (filteredLogs.length === 0) {
+        historyContent.innerHTML = `<p style='padding: 15px;'>Nessun log trovato negli ultimi ${years} anni.</p>`;
+        return;
+    }
+
+    let tableHTML = `
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>Data/Ora</th>
+                    <th>Nave</th>
+                    <th>Colore</th>
+                    <th>Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
     filteredLogs.forEach(log => {
-        html += `
-            <div class="history-item">
-                <div style="float: right;">
-                    <span style="cursor:pointer; font-size: 18px;" title="Modifica Log" onclick='openEditLogModal(${JSON.stringify(log)})'>✎</span>
-                    <span style="cursor:pointer; font-size: 18px;" title="Cancella Log" onclick='deleteLog(${log.id}, "${log.box_id}")'>🗑️</span>
-                </div>
-                <b>Data:</b> ${log.log_date}<br>
-                <b>Nave:</b> ${log.ship}<br>
-                <b>Colore:</b> <span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span>
-            </div>
+        tableHTML += `
+            <tr>
+                <td>${log.log_timestamp}</td>
+                <td>${log.ship}</td>
+                <td><span style="color:${COLOR_MAP[log.color_code]}; font-size: 20px; font-weight:bold;">●</span></td>
+                <td class="actions-cell">
+                    <span title="Modifica Log" onclick='openEditLogModal(${JSON.stringify(log)})'>✎</span>
+                    <span title="Cancella Log" onclick='deleteLog(${log.id}, "${log.box_id}")'>🗑️</span>
+                </td>
+            </tr>
         `;
     });
-    historyContent.innerHTML = html;
+
+    tableHTML += `
+            </tbody>
+        </table>
+    `;
+    historyContent.innerHTML = tableHTML;
 }
 
 function openEditLogModal(log) {
     closeHistoryPanel();
+    const [datePart, timePart] = log.log_timestamp.split(' ');
     document.getElementById('log-modal-title').textContent = 'Modifica Log';
     document.getElementById('log-save-button').textContent = 'Salva Modifiche';
     document.getElementById('logIdInput').value = log.id;
     document.getElementById('boxInput').value = log.box_id;
     document.getElementById('boxInput').readOnly = true;
-    document.getElementById('dateInput').value = log.log_date;
+    document.getElementById('dateInput').value = datePart;
+    document.getElementById('timeInput').value = timePart || '00:00'; // Gestisce timestamp senza orario
+ 
     document.getElementById('shipInput').value = log.ship;
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
     openModal('modal-log-entry');
@@ -210,13 +245,15 @@ async function deleteLog(logId, boxId) {
 
 async function saveLog() {
     const logId = document.getElementById('logIdInput').value;
+    const date = document.getElementById('dateInput').value;
+    const time = document.getElementById('timeInput').value;
     const boxData = {
         boxId: document.getElementById('boxInput').value.toUpperCase(),
-        date: document.getElementById('dateInput').value,
+        timestamp: `${date} ${time}`, // Combina data e ora
         ship: document.getElementById('shipInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
-    if (!boxData.boxId || !boxData.date || !boxData.ship) { showToast("ID Box, Data e Nave sono campi obbligatori.", 'error'); return; }
+    if (!boxData.boxId || !date || !time || !boxData.ship) { showToast("Tutti i campi sono obbligatori.", 'error'); return; }
     if (!gridLayers[boxData.boxId]) { showToast(`L'ID Box "${boxData.boxId}" non esiste sulla mappa.`, 'error'); return; }
     
     const url = logId ? `/api/logs/${logId}` : '/api/logs';
@@ -240,15 +277,15 @@ function renderizzaStili(filtro = null) {
             layer.setStyle(styleDefault).setTooltipContent(defaultTooltip);
             continue;
         }
-        const logsOrdinati = [...logsPerBox].sort((a, b) => new Date(b.log_date) - new Date(a.log_date));
+        const logsOrdinati = [...logsPerBox].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
         const logsFiltrati = logsOrdinati.filter(data => {
             if (!filtro) return true;
             let mostra = true;
-            if (filtro.data && data.log_date !== filtro.data) mostra = false;
+            if (filtro.data && !data.log_timestamp.startsWith(filtro.data)) mostra = false;
             if (filtro.nave && !data.ship.toLowerCase().includes(filtro.nave.toLowerCase())) mostra = false;
             if (filtro.colore && data.color_code !== filtro.colore) mostra = false;
             if (filtro.stato && mostra) {
-                const oggi = new Date(); const dataBox = new Date(data.log_date);
+                const oggi = new Date(); const dataBox = new Date(data.log_timestamp);
                 const diffGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
                 if (filtro.stato === 'ok' && diffGiorni > GIORNI_BORDO_GIALLO) mostra = false;
                 if (filtro.stato === 'warning' && (diffGiorni <= GIORNI_BORDO_GIALLO || diffGiorni > GIORNI_BORDO_ROSSO)) mostra = false;
@@ -261,14 +298,14 @@ function renderizzaStili(filtro = null) {
             continue;
         }
         const logPiuRecente = logsFiltrati[0];
-        const oggi = new Date(); const dataBox = new Date(logPiuRecente.log_date);
+        const oggi = new Date(); const dataBox = new Date(logPiuRecente.log_timestamp);
         const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
         let borderColor;
         if (differenzaGiorni > GIORNI_BORDO_ROSSO) borderColor = BORDO_ROSSO;
         else if (differenzaGiorni > GIORNI_BORDO_GIALLO) borderColor = BORDO_GIALLO;
         else borderColor = BORDO_VERDE;
         layer.setStyle({ fillColor: COLOR_MAP[logPiuRecente.color_code] || '#808080', color: borderColor, weight: 2, fillOpacity: 0.5, opacity: 1 });
-        let tooltipContent = `<b>Box:</b> ${boxId} (${logsOrdinati.length} log)<hr><i>Log più recente:</i><br><b>Data:</b> ${logPiuRecente.log_date}<br><b>Nave:</b> ${logPiuRecente.ship}`;
+        let tooltipContent = `<b>Box:</b> ${boxId} (${logsOrdinati.length} log)<hr><i>Log più recente:</i><br><b>Data/Ora:</b> ${logPiuRecente.log_timestamp}<br><b>Nave:</b> ${logPiuRecente.ship}`;
         layer.setTooltipContent(tooltipContent);
         layer.bringToFront();
     }
@@ -317,10 +354,10 @@ function triggerCSVDownload(csvContent, fileName) {
 function esportaLogCSV() {
     const boxIds = Object.keys(tuttiDatiLog);
     if (boxIds.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
-    let csvContent = "Data;Box;Nave;Colore\n";
+    let csvContent = "Timestamp;Box;Nave;Colore\n";
     boxIds.forEach(boxId => {
         tuttiDatiLog[boxId].forEach(data => {
-            csvContent += `${data.log_date};${boxId};${data.ship};${data.color_code}\n`;
+            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code}\n`;
         });
     });
     triggerCSVDownload(csvContent, "mappa_log_export.csv");
@@ -333,10 +370,12 @@ function processCSV(event) {
         const righe = e.target.result.split('\n');
         let importati = 0;
         for (const riga of righe) {
-            if (!riga.trim() || riga.toLowerCase().startsWith('data;box')) continue;
+            if (!riga.trim() || riga.toLowerCase().startsWith('timestamp;box')) continue;
             const parts = riga.split(';');
             if (parts.length >= 4) {
-                const boxData = { date: parts[0].trim(), boxId: parts[1].trim().toUpperCase(), ship: parts[2].trim(), colorCode: parts[3].trim() };
+                const [timestamp, boxId, ship, colorCode] = parts.map(p => p.trim());
+                const [date, time] = timestamp.split(' ');
+                const boxData = { date, time, boxId: boxId.toUpperCase(), ship, colorCode };
                 if (gridLayers[boxData.boxId]) {
                     await fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(boxData) });
                     importati++;
@@ -613,9 +652,57 @@ function validateShapefileUrl(url) {
     }
 }
 // --- 8. DASHBOARD ---
+function renderExpiredLogsList() {
+    const container = document.getElementById('expired-logs-list');
+    const expiredBoxes = [];
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0); // Normalizza la data di oggi per un confronto corretto
+
+    for (const boxId in tuttiDatiLog) {
+        const logsPerBox = tuttiDatiLog[boxId];
+        if (logsPerBox && logsPerBox.length > 0) {
+            // Trova il log più recente per questo box
+            const logPiuRecente = logsPerBox.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp))[0];
+            
+            const dataBox = new Date(logPiuRecente.log_timestamp);
+            dataBox.setHours(0, 0, 0, 0); // Normalizza anche la data del log
+
+            const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
+
+            // Se la differenza è maggiore di 30 giorni, lo aggiungiamo alla lista
+            if (differenzaGiorni > GIORNI_BORDO_ROSSO) {
+                expiredBoxes.push({
+                    boxId: boxId,
+                    log: logPiuRecente
+                });
+            }
+        }
+    }
+
+    if (expiredBoxes.length === 0) {
+        container.innerHTML = '<p style="padding: 10px;">Nessun box scaduto.</p>';
+        return;
+    }
+
+    // Ordina i box scaduti per ID
+    expiredBoxes.sort((a, b) => a.boxId.localeCompare(b.boxId));
+
+    let html = '';
+    expiredBoxes.forEach(item => {
+        html += `
+            <div class="content-item" style="padding: 10px;">
+                <b>Box: ${item.boxId}</b><br>
+                <small>Ultimo log: ${item.log.log_timestamp}</small><br>
+                <small>Nave: ${item.log.ship}</small>
+            </div>
+        `;
+    });
+    container.innerHTML = html;
+}
 function openDashboard() {
     updateDashboardStats();
     renderTodaysActivityDetail();
+    renderExpiredLogsList(); // <-- AGGIUNGI QUESTA RIGA
     createOrUpdateCharts();
     openModal('modal-dashboard');
 }
@@ -623,20 +710,21 @@ function updateDashboardStats() {
     const allLogs = Object.values(tuttiDatiLog).flat();
     document.getElementById('stat-total-logs').textContent = allLogs.length;
     const todayString = new Date().toISOString().split('T')[0];
-    const logsToday = allLogs.find(log => log.log_date === todayString);
-    document.getElementById('stat-today').textContent = logsToday ? logsToday.length : 0;
+    const logsToday = allLogs.filter(log => log.log_timestamp.startsWith(todayString)).length;
+    document.getElementById('stat-today').textContent = logsToday;
 }
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');
     const todayString = new Date().toISOString().split('T')[0];
-    const logsToday = Object.values(tuttiDatiLog).flat().filter(log => log.log_date === todayString);
+    const logsToday = Object.values(tuttiDatiLog).flat().filter(log => log.log_timestamp.startsWith(todayString));
     if (logsToday.length === 0) {
         container.innerHTML = "<p>Nessuna attività registrata oggi.</p>";
         return;
     }
     let html = '';
     logsToday.sort((a,b) => a.box_id.localeCompare(b.box_id)).forEach(log => {
-        html += `<div class="history-item" style="padding: 5px 0;"><span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b>.</div>`;
+        const timePart = log.log_timestamp.split(' ')[1] || '';
+        html += `<div class="history-item" style="padding: 5px 0;"><span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.</div>`;
     });
     container.innerHTML = html;
 }
