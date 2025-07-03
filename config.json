@@ -1,0 +1,31 @@
+{
+    "base_map": {
+        "attribution": "\u00a9 OpenStreetMap",
+        "url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    },
+    "external_layers": [
+        {
+            "format": "image/png",
+            "layers": "EL.BATIMETRICA.",
+            "name": "Batimetria",
+            "style": {
+                "color": "#ff8c00",
+                "fillColor": "#ff8c00",
+                "fillOpacity": 0.2,
+                "weight": 2
+            },
+            "transparent": true,
+            "type": "wms",
+            "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Batimetrica.map"
+        }
+    ],
+    "grid_bounds": {
+        "lat_end": 32,
+        "lat_start": 46,
+        "lon_end": 24,
+        "lon_start": 5.7
+    },
+    "wms_layers": [
+        
+    ]
+}
