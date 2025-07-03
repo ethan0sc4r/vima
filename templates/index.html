@@ -82,6 +82,20 @@
         .log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .log-table th, .log-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
         .log-table thead { position: sticky; top: 0; background-color: #e9ecef; z-index: 1; }
+        .grid-label {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            color: rgba(0, 0, 0, 0.7);
+            font-size: 15px;
+            font-weight: bold;
+            text-align: center;
+            pointer-events: none; /* Fa in modo che i click passino attraverso l'etichetta */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -120,7 +134,7 @@
                 </div>
                 <div class="log-manager-table-container">
                     <table class="log-table">
-                        <thead>
+                       <thead>
                             <tr>
                                 <th><input type="checkbox" onchange="toggleSelectAll(this)"></th>
                                 <th>Data/Ora</th>
@@ -128,6 +142,7 @@
                                 <th>Nave</th>
                                 <th>Colore</th>
                                 <th>Import ID</th>
+                                <th>Cavi Intersecati</th> 
                             </tr>
                         </thead>
                         <tbody id="log-table-body"></tbody>
@@ -149,10 +164,11 @@
         </div>
         <div id="history-content" class="panel-content"><p>Clicca su un box per vederne lo storico.</p></div>
         <div id="intersections-panel" style="border-top: 2px solid #008CBA; padding: 15px;">
-        <h4>Intersezioni Cavi</h4>
-        <button id="intersection-check-btn" class="btn-main-action full-width">Verifica Intersezioni</button>
-        <div id="intersection-results" style="margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-    </div>
+            <h4>Intersezioni Cavi</h4>
+            <div id="intersection-results" style="margin-top: 10px; max-height: 200px; overflow-y: auto;">
+                <p>Nessuna intersezione trovata.</p>
+            </div>
+        </div>
     </div>
 
     <div id="layer-manager-panel" class="side-panel left">

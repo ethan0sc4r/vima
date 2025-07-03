@@ -7,7 +7,8 @@ let gridLayers = {};
 let config = {};
 let colorChartInstance = null, shipChartInstance = null;
 let loadedExternalLayers = {};
-
+let intersectionCache = {};
+let gridLabelsLayerGroup;
 // Costanti globali
 const boxSize = 10 / 60;
 const GIORNI_BORDO_GIALLO = 15;
@@ -175,7 +176,54 @@ function resetLogTableFilters() {
     document.querySelector('#log-table-body input[type="checkbox"]').checked = false; // Deseleziona il master checkbox
     renderLogTable();
 }
+async function precomputeAllIntersections() {
+    showToast('Calcolo intersezioni geospaziali in corso...', 'info');
+    
+    // Raccoglie tutte le feature (cavi) da tutti i layer vettoriali caricati
+    const allCableFeatures = [];
+    for (const layerId in loadedExternalLayers) {
+        const externalLayer = loadedExternalLayers[layerId];
+        if (externalLayer.toGeoJSON) {
+            const layerData = externalLayer.toGeoJSON();
+            allCableFeatures.push(...layerData.features);
+        }
+    }
 
+    if (allCableFeatures.length === 0) {
+        showToast('Nessun layer di cavi trovato per l\'analisi.', 'info');
+        return;
+    }
+    
+    // Itera su ogni box della griglia
+    for (const boxId in gridLayers) {
+        const boxLayer = gridLayers[boxId];
+        const bounds = boxLayer.getBounds();
+        const boxPolygon = turf.polygon([[
+            [bounds.getWest(), bounds.getSouth()],
+            [bounds.getEast(), bounds.getSouth()],
+            [bounds.getEast(), bounds.getNorth()],
+            [bounds.getWest(), bounds.getNorth()],
+            [bounds.getWest(), bounds.getSouth()]
+        ]]);
+
+        const intersectingCables = [];
+        // Confronta il box con ogni cavo
+        for (const cableFeature of allCableFeatures) {
+            if (turf.booleanIntersects(boxPolygon, cableFeature)) {
+                const props = cableFeature.properties;
+                // Estrai un nome significativo, personalizzalo se necessario
+                const displayName = props.NOBJNM || props.Name || props.ID || props.nome || props.NOME_UFFICIALE || 'Cavo senza nome';
+                intersectingCables.push(displayName);
+            }
+        }
+        
+        // Salva il risultato (anche se vuoto) nella cache
+        intersectionCache[boxId] = intersectingCables;
+    }
+
+    console.log("Pre-calcolo intersezioni completato.", intersectionCache);
+    showToast('Analisi intersezioni completata!', 'success');
+}
 /**
  * Renderizza la tabella nel modal di gestione log.
  * @param {Array} [logs] - Un array opzionale di log da visualizzare. Se non fornito, usa tutti i log globali.
@@ -186,16 +234,20 @@ function renderLogTable(logs) {
 
     const logList = logs || Object.values(tuttiDatiLog).flat().sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
 
-    tableBody.innerHTML = logList.map(log => `
-        <tr data-log-id="${log.id}">
-            <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
-            <td>${log.log_timestamp}</td>
-            <td>${log.box_id}</td>
-            <td>${log.ship}</td>
-            <td><span style="color:${COLOR_MAP[log.color_code] || '#808080'}; font-size: 1.2em; font-weight:bold;">●</span></td>
-            <td>${log.import_id || 'manual'}</td>
-        </tr>
-    `).join('') || '<tr><td colspan="6" style="text-align:center; padding: 15px;">Nessun log trovato.</td></tr>';
+    tableBody.innerHTML = logList.map(log => {
+    const intersections = intersectionCache[log.box_id] || [];
+    const cablesText = intersections.join(', ') || '-'; // Unisce i nomi con una virgola
+    return `
+            <tr data-log-id="${log.id}">
+                <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
+                <td>${log.log_timestamp}</td>
+                <td>${log.box_id}</td>
+                <td>${log.ship}</td>
+                <td><span style="color:${COLOR_MAP[log.color_code] || '#808080'}; font-size: 1.2em;">●</span></td>
+                <td>${log.import_id || 'manual'}</td>
+                <td>${cablesText}</td> </tr>
+        `;
+    }).join('') || '<tr><td colspan="7" style="text-align:center;">Nessun log.</td></tr>';
 }
 
 function closeAllModals() {
@@ -279,11 +331,15 @@ async function disegnaGriglia(bounds) {
         await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newConfig) });
     }
     
+    // Pulisci sia la griglia che le etichette
     gridLayerGroup.clearLayers();
+    gridLabelsLayerGroup.clearLayers();
     gridLayers = {};
+
     const gridLatStart = Math.ceil(boundsToDraw.lat_start / boxSize) * boxSize;
     const gridLonStart = Math.floor(boundsToDraw.lon_start / boxSize) * boxSize;
     let relativeRowIndex = 0;
+
     for (let lat = gridLatStart; lat > boundsToDraw.lat_end; lat -= boxSize) {
         let relativeColIndex = 0;
         for (let lon = gridLonStart; lon < boundsToDraw.lon_end; lon += boxSize) {
@@ -291,10 +347,30 @@ async function disegnaGriglia(bounds) {
             const colLabel = String(relativeColIndex + 1).padStart(2, '0');
             const boxId = `${rowLabel}-${colLabel}`;
             const rectBounds = [[lat, lon], [lat - boxSize, lon + boxSize]];
+            
+            // Crea il rettangolo del box
             const rectangle = L.rectangle(rectBounds, styleDefault).bindTooltip(`<b>ID Box:</b> ${boxId}`);
             rectangle.on('click', () => handleBoxClick(boxId));
             gridLayerGroup.addLayer(rectangle);
             gridLayers[boxId] = rectangle;
+
+            // --- INIZIO CODICE PER LE ETICHETTE ---
+            // Calcola il centro del box
+            const centerLat = lat - boxSize / 2;
+            const centerLon = lon + boxSize / 2;
+            
+            // Crea un marcatore di testo usando L.divIcon
+            const label = L.marker([centerLat, centerLon], {
+                icon: L.divIcon({
+                    className: 'grid-label', // Classe CSS per lo stile
+                    html: `<span>${boxId}</span>`,
+                    iconSize: [40, 10] // Dimensioni dell'icona
+                }),
+                interactive: false // Rende l'etichetta non cliccabile
+            });
+            gridLabelsLayerGroup.addLayer(label);
+            // --- FINE CODICE PER LE ETICHETTE ---
+
             relativeColIndex++;
         }
         relativeRowIndex++;
@@ -317,18 +393,21 @@ function handleBoxClick(boxId) {
     const showBtn = document.getElementById('history-show-btn');
     showBtn.onclick = () => renderHistory(boxId);
     
-    // --- INIZIO MODIFICA ---
-    // Collega il nuovo pulsante delle intersezioni
-    const checkBtn = document.getElementById('intersection-check-btn');
-    checkBtn.onclick = () => findIntersections(boxId);
-    
-    // Pulisci i risultati precedenti
-    document.getElementById('intersection-results').innerHTML = '';
-    // --- FINE MODIFICA ---
-    
-    openHistoryPanel();
-}
+    displayIntersectionResults(boxId); 
 
+    openHistoryPanel();
+     
+}
+function displayIntersectionResults(boxId) {
+    const resultsContainer = document.getElementById('intersection-results');
+    const intersectingCables = intersectionCache[boxId] || [];
+
+    if (intersectingCables.length > 0) {
+        resultsContainer.innerHTML = '<ul>' + intersectingCables.map(name => `<li>${name}</li>`).join('') + '</ul>';
+    } else {
+        resultsContainer.innerHTML = '<p>Nessuna intersezione trovata.</p>';
+    }
+}
 function renderHistory(boxId) {
     const historyContent = document.getElementById('history-content');
     const years = parseInt(document.getElementById('history-years').value, 10);
@@ -709,6 +788,10 @@ async function saveConfigAndReload() {
     showToast("Configurazione dei layer salvata. La pagina verrà ricaricata.", 'success');
     setTimeout(() => window.location.reload(), 1500);
 }
+/**
+ * Pulisce i layer esterni esistenti e carica quelli nuovi dalla configurazione.
+ * Restituisce un array di "promesse" per i caricamenti asincroni (WFS, GeoJSON, SHP).
+ */
 function loadExternalLayers() {
     // 1. Rimuove i layer esterni esistenti dalla mappa e dal controllo layer
     for (const key in loadedExternalLayers) {
@@ -720,42 +803,43 @@ function loadExternalLayers() {
         }
     }
     
-    // 2. Resetta l'oggetto che contiene i layer caricati
     loadedExternalLayers = {};
 
-    if (!config.external_layers) return;
+    if (!config.external_layers) {
+        return []; // Non ci sono layer da caricare
+    }
+    
+    const promises = []; // Array per tracciare i caricamenti asincroni
+
+    // Funzione helper per creare i popup con le proprietà delle feature
+    const onEachFeaturePopup = (feature, layer) => {
+        if (feature.properties) {
+            let popupContent = '<div style="max-height: 200px; overflow-y: auto;"><b>Proprietà:</b><br>';
+            for (const [key, value] of Object.entries(feature.properties)) {
+                popupContent += `<b>${key}:</b> ${value}<br>`;
+            }
+            popupContent += '</div>';
+            layer.bindPopup(popupContent);
+        }
+    };
 
     // 3. Itera sulla configurazione e crea i nuovi layer
     config.external_layers.forEach((layerConfig, index) => {
         const layerId = `${layerConfig.type}-${index}`;
         let layer;
 
-        // Funzione helper per creare i popup con le proprietà
-        const onEachFeaturePopup = (feature, layer) => {
-            if (feature.properties) {
-                let popupContent = '<div style="max-height: 200px; overflow-y: auto;"><b>Proprietà:</b><br>';
-                for (const [key, value] of Object.entries(feature.properties)) {
-                    popupContent += `<b>${key}:</b> ${value}<br>`;
-                }
-                popupContent += '</div>';
-                layer.bindPopup(popupContent);
-            }
-        };
-
         // --- Gestione Layer WMS (Web Map Service) ---
         if (layerConfig.type === 'wms') {
             const proxyUrl = `/api/wms_proxy`;
             layer = L.tileLayer.wms(proxyUrl, {
-                ...layerConfig, // Passa tutta la configurazione al proxy
+                ...layerConfig,
                 pane: 'shapefilePane',
                 wms_server_url: layerConfig.url,
                 version: '1.3.0',
                 crs: L.CRS.EPSG4326
             });
             loadedExternalLayers[layerId] = layer;
-            if (layerControl) {
-                layerControl.addOverlay(layer, layerConfig.name);
-            }
+            layerControl.addOverlay(layer, layerConfig.name);
         }
 
         // --- Gestione Layer WFS (Web Feature Service) ---
@@ -768,19 +852,14 @@ function loadExternalLayers() {
             
             const params = new URLSearchParams({
                 wfs_server_url: layerConfig.url,
-                service: 'WFS',
-                version: '2.0.0',
-                request: 'GetFeature',
-                typeName: layerConfig.typeName,
-                // --- QUESTA È LA RIGA CORRETTA ---
-                outputFormat: 'GEOJSON', // Usa 'GEOJSON' invece di 'application/json'
+                service: 'WFS', version: '2.0.0', request: 'GetFeature',
+                typeName: layerConfig.typeName, outputFormat: 'GEOJSON',
                 authentication: layerConfig.authentication || 'none',
-                username: layerConfig.username || '',
-                password: layerConfig.password || ''
+                username: layerConfig.username || '', password: layerConfig.password || ''
             });
             const proxyUrl = `/api/wfs_proxy?${params.toString()}`;
 
-            fetch(proxyUrl)
+            const promise = fetch(proxyUrl)
                 .then(res => res.ok ? res.json() : Promise.reject(new Error(`Errore HTTP ${res.status}`)))
                 .then(data => {
                     if (data.error) throw new Error(data.error);
@@ -791,11 +870,10 @@ function loadExternalLayers() {
                     console.error(`Errore caricamento WFS ${layerConfig.name}:`, error);
                     showToast(`Errore caricamento WFS "${layerConfig.name}": ${error.message}`, 'error');
                 });
-                
+            
             loadedExternalLayers[layerId] = layer;
-            if (layerControl) {
-                layerControl.addOverlay(layer, layerConfig.name);
-            }
+            layerControl.addOverlay(layer, layerConfig.name);
+            promises.push(promise); // Aggiungi la promessa di caricamento
         }
         
         // --- Gestione Layer GeoJSON ---
@@ -806,7 +884,7 @@ function loadExternalLayers() {
                 onEachFeature: onEachFeaturePopup
             });
 
-            fetch(layerConfig.url)
+            const promise = fetch(layerConfig.url)
                 .then(res => res.ok ? res.json() : Promise.reject(new Error(`Errore HTTP ${res.status}`)))
                 .then(data => {
                     layer.addData(data);
@@ -816,33 +894,33 @@ function loadExternalLayers() {
                     console.error(`Errore caricamento GeoJSON ${layerConfig.name}:`, error);
                     showToast(`Errore caricamento GeoJSON "${layerConfig.name}": ${error.message}`, 'error');
                 });
-                
+            
             loadedExternalLayers[layerId] = layer;
-            if (layerControl) {
-                layerControl.addOverlay(layer, layerConfig.name);
-            }
+            layerControl.addOverlay(layer, layerConfig.name);
+            promises.push(promise); // Aggiungi la promessa di caricamento
         }
 
         // --- Gestione Layer Shapefile (.zip) ---
         else if (layerConfig.type === 'shp') {
             showToast(`Caricamento shapefile "${layerConfig.name}" in corso...`, 'info');
-            shp(layerConfig.url).then(geojson => {
+            const promise = shp(layerConfig.url).then(geojson => {
                 const shpLayer = L.geoJSON(geojson, {
                     pane: 'shapefilePane',
                     style: () => layerConfig.style,
                     onEachFeature: onEachFeaturePopup
                 });
                 loadedExternalLayers[layerId] = shpLayer;
-                if (layerControl) {
-                    layerControl.addOverlay(shpLayer, layerConfig.name);
-                }
+                layerControl.addOverlay(shpLayer, layerConfig.name);
                 showToast(`Shapefile "${layerConfig.name}" caricato.`, 'success');
             }).catch(error => {
                 console.error(`Errore caricamento Shapefile ${layerConfig.name}:`, error);
                 showToast(`Errore caricamento Shapefile "${layerConfig.name}": ${error.message}`, 'error');
             });
+            promises.push(promise); // Aggiungi la promessa di caricamento
         }
     });
+
+    return promises; // Restituisce l'array di tutte le promesse asincrone
 }
 function findIntersections(boxId) {
     const resultsContainer = document.getElementById('intersection-results');
@@ -1011,15 +1089,15 @@ function renderExpiredLogsList() {
     expiredBoxes.sort((a, b) => a.boxId.localeCompare(b.boxId));
 
     let html = '';
-    expiredBoxes.forEach(item => {
-        html += `
-            <div class="content-item" style="padding: 10px;">
-                <b>Box: ${item.boxId}</b><br>
-                <small>Ultimo log: ${item.log.log_timestamp}</small><br>
-                <small>Nave: ${item.log.ship}</small>
-            </div>
-        `;
-    });
+    const intersections = intersectionCache[item.boxId] || [];
+    const cablesText = intersections.length > 0 ? `Cavi: ${intersections.join(', ')}` : 'Nessuna intersezione';
+    html += `
+        <div class="content-item" style="padding: 10px;">
+            <b>Box: ${item.boxId}</b><br>
+            <small>Ultimo log: ${item.log.log_timestamp}</small><br>
+            <small>Nave: ${item.log.ship}</small><br>
+            <small style="color: #007BFF;">${cablesText}</small> </div>
+    `;
     container.innerHTML = html;
 }
 function openDashboard() {
@@ -1051,7 +1129,12 @@ function renderTodaysActivityDetail() {
     let html = '';
     logsToday.sort((a,b) => a.box_id.localeCompare(b.box_id)).forEach(log => {
         const timePart = log.log_timestamp.split(' ')[1] || '';
-        html += `<div class="history-item" style="padding: 5px 0;"><span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.</div>`;
+        const intersections = intersectionCache[log.box_id] || [];
+        const cablesText = intersections.length > 0 ? `(Interseca: ${intersections.join(', ')})` : '';
+        html += `<div class="history-item" style="padding: 5px 0;">` +
+            `<span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> ` +
+            `Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.${cablesText}` +
+            `</div>`;
     });
     container.innerHTML = html;
 }
@@ -1142,33 +1225,54 @@ function connectWebSocket() {
     };
 }
 async function inizializzaApplicazione() {
+    // Imposta la data di default nel form dei log
     document.getElementById('dateInput').valueAsDate = new Date();
+
     try {
+        // 1. Carica la configurazione principale dell'applicazione
         const response = await fetch('/api/config');
         if (!response.ok) throw new Error('File di configurazione non trovato sul server.');
         config = await response.json();
         
+        // 2. Inizializza la mappa Leaflet
         map = L.map('map').setView([43.5, 16], 7);
         const baseMapLayer = L.tileLayer(config.base_map.url_template, { attribution: config.base_map.attribution });
         baseMapLayer.addTo(map);
 
+        // 3. Inizializza i gruppi di layer per la griglia e le etichette
         gridLayerGroup = L.featureGroup().addTo(map);
+        gridLabelsLayerGroup = L.featureGroup(); // Non aggiungerlo alla mappa di default
+
         const baseLayers = { "Mappa Base": baseMapLayer };
-        const overlayLayers = { "Griglia Interattiva": gridLayerGroup };
-        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);
-        
+        const overlayLayers = { 
+            "Griglia Interattiva": gridLayerGroup,
+            "ID Box": gridLabelsLayerGroup // Questa riga è corretta e va mantenuta
+        };
+        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);   
+        // Crea un "pane" personalizzato per assicurare che i layer vettoriali stiano sopra la griglia
         map.createPane('shapefilePane');
         map.getPane('shapefilePane').style.zIndex = 390;
 
+        // 4. Imposta i valori iniziali per il form della griglia
         const gridBounds = config.grid_bounds;
         document.getElementById('lat_start').value = gridBounds.lat_start;
         document.getElementById('lon_start').value = gridBounds.lon_start;
         document.getElementById('lat_end').value = gridBounds.lat_end;
         document.getElementById('lon_end').value = gridBounds.lon_end;
         
-        loadExternalLayers();
+        // 5. Disegna la griglia e carica i log iniziali
         await disegnaGriglia(gridBounds);
         
+        // 6. Avvia il caricamento dei layer esterni (WMS, WFS, etc.)
+        const layerPromises = loadExternalLayers();
+
+        // 7. Aspetta che TUTTI i layer asincroni (WFS, SHP, GeoJSON) finiscano di caricarsi
+        await Promise.allSettled(layerPromises);
+
+        // 8. SOLO ORA, avvia il pre-calcolo delle intersezioni tra box e cavi
+        await precomputeAllIntersections();
+
+        // 9. Imposta gli eventi finali dell'interfaccia
         map.on('mousemove', function(e) {
             const coordsBox = document.getElementById('coords-box');
             const dmsBox = document.getElementById('dms-box');
@@ -1179,6 +1283,7 @@ async function inizializzaApplicazione() {
             dmsBox.innerHTML = `GMS: ${decimalToDms(lat, true)}, ${decimalToDms(lng, false)}`;
         });
 
+        // 10. Connetti al WebSocket per aggiornamenti in tempo reale
         connectWebSocket();
 
     } catch(e) {
@@ -1186,5 +1291,4 @@ async function inizializzaApplicazione() {
         document.body.innerHTML = `<h1>Errore critico durante l'avvio. Controlla la console (F12).</h1><p>${e.message}</p>`;
     }
 }
-
 window.onload = inizializzaApplicazione;
