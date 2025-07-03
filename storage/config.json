@@ -5,6 +5,7 @@
     },
     "external_layers": [
         {
+            "authentication": "none",
             "format": "image/png",
             "layers": "EL.BATIMETRICA.",
             "name": "Batimetria",
@@ -17,6 +18,19 @@
             "transparent": true,
             "type": "wms",
             "url": "http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/Vettoriali/Batimetrica.map"
+        },
+        {
+            "type": "wfs",
+            "name": "CAVI",
+            "url": "https://geoportalemm.marina.difesa.it/server/services/Hosted/TEST_WFS_DBMFF_CABLE/MapServer/WFSServer",
+            "style": {
+                "color": "#ff8c00",
+                "weight": 2,
+                "fillColor": "#ff8c00",
+                "fillOpacity": 0.2
+            },
+            "typeName": "CBLSUB",
+            "authentication": "none"
         }
     ],
     "grid_bounds": {
@@ -25,7 +39,5 @@
         "lon_end": 24,
         "lon_start": 5.7
     },
-    "wms_layers": [
-        
-    ]
+    "wms_layers": []
 }

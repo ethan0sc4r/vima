@@ -63,22 +63,72 @@ def websocket(ws):
 
 @app.route('/api/wms_proxy')
 def wms_proxy():
-    """Funziona come un proxy per le richieste WMS per aggirare i problemi di CORS."""
+    """Funziona come un proxy per le richieste WMS, gestendo anche l'autenticazione."""
     wms_params = request.args.to_dict()
     wms_server_url = wms_params.pop('wms_server_url', None)
+    auth_type = wms_params.pop('authentication', 'none')
+
     if not wms_server_url:
         return "URL del server WMS mancante nel proxy", 400
+
     try:
-        full_request_url = requests.Request('GET', wms_server_url, params=wms_params).prepare().url
-        print(f"Richiesta WMS Proxy a: {full_request_url}", flush=True)
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(wms_server_url, params=wms_params, headers=headers, stream=True, timeout=15)
+        auth = None
+        # --- MODIFICA QUI ---
+        # Imposta un User-Agent che simula QGIS
+        headers = {'User-Agent': 'QGIS/3.34.8'}
+
+        if auth_type == 'basic':
+            wms_user = wms_params.pop('username', None)
+            wms_pass = wms_params.pop('password', None)
+            if wms_user and wms_pass:
+                auth = (wms_user, wms_pass)
+        
+        response = requests.get(wms_server_url, params=wms_params, headers=headers, auth=auth, stream=True, timeout=15, verify=False)
         response.raise_for_status()
+        
         return Response(response.content, content_type=response.headers['content-type'])
+        
     except requests.exceptions.RequestException as e:
         print(f"ERRORE PROXY WMS: {e}", flush=True)
         return f"Errore nella connessione al server WMS esterno: {e}", 502
+    
+@app.route('/api/wfs_proxy')
+def wfs_proxy():
+    """Funziona come un proxy per le richieste WFS, con gestione robusta degli errori."""
+    params = request.args.to_dict()
+    wfs_server_url = params.pop('wfs_server_url', None)
+    auth_type = params.pop('authentication', 'none')
 
+    if not wfs_server_url:
+        return "URL del server WFS mancante nel proxy", 400
+
+    try:
+        auth = None
+        # --- MODIFICA QUI ---
+        # Imposta un User-Agent che simula QGIS
+        headers = {'User-Agent': 'QGIS/3.34.8'}
+
+        if auth_type == 'basic':
+            wfs_user = params.pop('username', None)
+            wfs_pass = params.pop('password', None)
+            if wfs_user and wfs_pass:
+                auth = (wfs_user, wms_pass)
+        
+        response = requests.get(wfs_server_url, params=params, headers=headers, auth=auth, timeout=20, verify=False)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' in content_type:
+            return jsonify(response.json())
+        else:
+            error_text = response.text
+            print(f"RISPOSTA NON JSON DAL SERVER WFS:\n{error_text}")
+            return jsonify({"error": "Il server WFS ha restituito una risposta non valida (non JSON).", "details": error_text}), 502
+
+    except Exception as e:
+        print(f"ERRORE PROXY WFS (generico): {e}", flush=True)
+        return jsonify({"error": f"Errore generico nel proxy: {str(e)}"}), 502
+    
 @app.route('/api/config', methods=['GET', 'POST'])
 def manage_config():
     """Legge e scrive il file di configurazione globale."""

@@ -311,9 +311,21 @@ async function disegnaGriglia(bounds) {
 function handleBoxClick(boxId) {
     document.getElementById('boxInput').value = boxId;
     document.getElementById('history-title').innerText = `Storico Box: ${boxId}`;
-    document.getElementById('history-content').innerHTML = `<p style="padding: 15px;">Seleziona un periodo e clicca "Mostra".</p>`;
+    document.getElementById('history-content').innerHTML = `<p style="padding: 15px;">Seleziona un periodo e clicca "Mostra Storico".</p>`;
+    
+    // Collega il pulsante dello storico
     const showBtn = document.getElementById('history-show-btn');
     showBtn.onclick = () => renderHistory(boxId);
+    
+    // --- INIZIO MODIFICA ---
+    // Collega il nuovo pulsante delle intersezioni
+    const checkBtn = document.getElementById('intersection-check-btn');
+    checkBtn.onclick = () => findIntersections(boxId);
+    
+    // Pulisci i risultati precedenti
+    document.getElementById('intersection-results').innerHTML = '';
+    // --- FINE MODIFICA ---
+    
     openHistoryPanel();
 }
 
@@ -596,15 +608,38 @@ function openEditLayerModal(index) {
     document.getElementById('layer-url').value = layer.url;
     document.getElementById('layer-color').value = layer.style.color;
     document.getElementById('layer-weight').value = layer.style.weight;
-    toggleLayerFormFields();
+
+    // Popola i campi specifici per WMS e autenticazione
     if (layer.type === 'wms') {
-        document.getElementById('wms-layers').value = layer.layers;
+        document.getElementById('wms-layers').value = layer.layers || '';
+        document.getElementById('layer-auth-type').value = layer.authentication || 'none';
+        document.getElementById('layer-username').value = layer.username || '';
+        document.getElementById('layer-password').value = layer.password || '';
+    }  else if (layer.type === 'wfs') { // AGGIUNGI QUESTO BLOCCO
+        document.getElementById('wfs-typename').value = layer.typeName || '';
+        document.getElementById('layer-auth-type').value = layer.authentication || 'none';
+        document.getElementById('layer-username').value = layer.username || '';
+        document.getElementById('layer-password').value = layer.password || '';
     }
+        
+    toggleLayerFormFields(); // Aggiorna la visibilità di tutti i campi
     openModal('modal-add-edit-layer');
 }
 function toggleLayerFormFields() {
     const type = document.getElementById('layer-type').value;
-    document.getElementById('wms-fields').style.display = (type === 'wms') ? 'flex' : 'none';
+    const isWMS = type === 'wms';
+    const isWFS = type === 'wfs';
+
+    // Gestione campi WMS
+    document.getElementById('wms-fields').style.display = isWMS ? 'flex' : 'none';
+    document.getElementById('auth-fields-container').style.display = (isWMS || isWFS) ? 'block' : 'none';
+    
+    // Gestione campi WFS
+    document.getElementById('wfs-fields').style.display = isWFS ? 'flex' : 'none';
+    
+    if (isWMS || isWFS) {
+        toggleAuthFields();
+    }
 }
 async function saveLayer() {
     const index = parseInt(document.getElementById('layer-index-input').value, 10);
@@ -622,10 +657,23 @@ async function saveLayer() {
     
     if (layerData.type === 'wms') {
         layerData.layers = document.getElementById('wms-layers').value;
-        layerData.format = 'image/png';
-        layerData.transparent = true;
+        const authType = document.getElementById('layer-auth-type').value;
+        layerData.authentication = authType;
+
+        if (authType === 'basic') {
+            layerData.username = document.getElementById('layer-username').value;
+            layerData.password = document.getElementById('layer-password').value;
+        }
+    } else if (layerData.type === 'wfs') { // AGGIUNGI QUESTO BLOCCO
+        layerData.typeName = document.getElementById('wfs-typename').value;
+        const authType = document.getElementById('layer-auth-type').value;
+        layerData.authentication = authType;
+        if (authType === 'basic') {
+            layerData.username = document.getElementById('layer-username').value;
+            layerData.password = document.getElementById('layer-password').value;
+        }
     }
-    
+        
     // Validazione specifica per shapefile
     if (layerData.type === 'shp') {
         const validation = validateShapefileUrl(layerData.url);
@@ -662,73 +710,194 @@ async function saveConfigAndReload() {
     setTimeout(() => window.location.reload(), 1500);
 }
 function loadExternalLayers() {
-    // Rimuovi layer esistenti
+    // 1. Rimuove i layer esterni esistenti dalla mappa e dal controllo layer
     for (const key in loadedExternalLayers) {
-        if (map.hasLayer(loadedExternalLayers[key])) map.removeLayer(loadedExternalLayers[key]);
-        if (layerControl) layerControl.removeLayer(loadedExternalLayers[key]);
+        if (map.hasLayer(loadedExternalLayers[key])) {
+            map.removeLayer(loadedExternalLayers[key]);
+        }
+        if (layerControl) {
+            layerControl.removeLayer(loadedExternalLayers[key]);
+        }
     }
     
-    const newLoadedLayers = {};
-    
-    if (config.external_layers) {
-        config.external_layers.forEach((layerConfig, index) => {
-            const layerId = `${layerConfig.type}-${index}`;
-            let layer;
+    // 2. Resetta l'oggetto che contiene i layer caricati
+    loadedExternalLayers = {};
+
+    if (!config.external_layers) return;
+
+    // 3. Itera sulla configurazione e crea i nuovi layer
+    config.external_layers.forEach((layerConfig, index) => {
+        const layerId = `${layerConfig.type}-${index}`;
+        let layer;
+
+        // Funzione helper per creare i popup con le proprietà
+        const onEachFeaturePopup = (feature, layer) => {
+            if (feature.properties) {
+                let popupContent = '<div style="max-height: 200px; overflow-y: auto;"><b>Proprietà:</b><br>';
+                for (const [key, value] of Object.entries(feature.properties)) {
+                    popupContent += `<b>${key}:</b> ${value}<br>`;
+                }
+                popupContent += '</div>';
+                layer.bindPopup(popupContent);
+            }
+        };
+
+        // --- Gestione Layer WMS (Web Map Service) ---
+        if (layerConfig.type === 'wms') {
+            const proxyUrl = `/api/wms_proxy`;
+            layer = L.tileLayer.wms(proxyUrl, {
+                ...layerConfig, // Passa tutta la configurazione al proxy
+                pane: 'shapefilePane',
+                wms_server_url: layerConfig.url,
+                version: '1.3.0',
+                crs: L.CRS.EPSG4326
+            });
+            loadedExternalLayers[layerId] = layer;
+            if (layerControl) {
+                layerControl.addOverlay(layer, layerConfig.name);
+            }
+        }
+
+        // --- Gestione Layer WFS (Web Feature Service) ---
+        else if (layerConfig.type === 'wfs') {
+            layer = L.geoJSON(null, {
+                pane: 'shapefilePane',
+                style: () => layerConfig.style,
+                onEachFeature: onEachFeaturePopup
+            });
             
-            if (layerConfig.type === 'wms') {
-                const proxyUrl = `/api/wms_proxy`;
-                layer = L.tileLayer.wms(proxyUrl, { 
-                    ...layerConfig, 
-                    pane: 'shapefilePane', 
-                    wms_server_url: layerConfig.url, 
-                    version: '1.3.0', 
-                    crs: L.CRS.EPSG4326 
-                });
-            } 
-            else if (layerConfig.type === 'shp') {
-                // SOLUZIONE 1: Usa shp.js
-                loadShapefileWithShpJs(layerConfig, layerId, newLoadedLayers);
-            } 
-            else if (layerConfig.type === 'geojson') {
-                layer = L.geoJSON(null, { 
-                    pane: 'shapefilePane', 
-                    style: () => layerConfig.style,
-                    onEachFeature: function(feature, layer) {
-                        if (feature.properties) {
-                            let popupContent = '<b>Proprietà:</b><br>';
-                            for (const [key, value] of Object.entries(feature.properties)) {
-                                popupContent += `<b>${key}:</b> ${value}<br>`;
-                            }
-                            layer.bindPopup(popupContent);
-                        }
-                    }
+            const params = new URLSearchParams({
+                wfs_server_url: layerConfig.url,
+                service: 'WFS',
+                version: '2.0.0',
+                request: 'GetFeature',
+                typeName: layerConfig.typeName,
+                // --- QUESTA È LA RIGA CORRETTA ---
+                outputFormat: 'GEOJSON', // Usa 'GEOJSON' invece di 'application/json'
+                authentication: layerConfig.authentication || 'none',
+                username: layerConfig.username || '',
+                password: layerConfig.password || ''
+            });
+            const proxyUrl = `/api/wfs_proxy?${params.toString()}`;
+
+            fetch(proxyUrl)
+                .then(res => res.ok ? res.json() : Promise.reject(new Error(`Errore HTTP ${res.status}`)))
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    layer.addData(data);
+                    showToast(`Layer WFS "${layerConfig.name}" caricato.`, 'success');
+                })
+                .catch(error => {
+                    console.error(`Errore caricamento WFS ${layerConfig.name}:`, error);
+                    showToast(`Errore caricamento WFS "${layerConfig.name}": ${error.message}`, 'error');
                 });
                 
-                fetch(layerConfig.url)
-                    .then(res => {
-                        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-                        return res.json();
-                    })
-                    .then(data => {
-                        layer.addData(data);
-                        showToast(`GeoJSON "${layerConfig.name}" caricato con successo`, 'success');
-                    })
-                    .catch(error => {
-                        console.error(`Errore caricamento GeoJSON ${layerConfig.name}:`, error);
-                        showToast(`Errore caricamento GeoJSON "${layerConfig.name}": ${error.message}`, 'error');
-                    });
+            loadedExternalLayers[layerId] = layer;
+            if (layerControl) {
+                layerControl.addOverlay(layer, layerConfig.name);
             }
-            
-            if (layer) {
-                newLoadedLayers[layerId] = layer;
+        }
+        
+        // --- Gestione Layer GeoJSON ---
+        else if (layerConfig.type === 'geojson') {
+            layer = L.geoJSON(null, {
+                pane: 'shapefilePane',
+                style: () => layerConfig.style,
+                onEachFeature: onEachFeaturePopup
+            });
+
+            fetch(layerConfig.url)
+                .then(res => res.ok ? res.json() : Promise.reject(new Error(`Errore HTTP ${res.status}`)))
+                .then(data => {
+                    layer.addData(data);
+                    showToast(`Layer GeoJSON "${layerConfig.name}" caricato.`, 'success');
+                })
+                .catch(error => {
+                    console.error(`Errore caricamento GeoJSON ${layerConfig.name}:`, error);
+                    showToast(`Errore caricamento GeoJSON "${layerConfig.name}": ${error.message}`, 'error');
+                });
+                
+            loadedExternalLayers[layerId] = layer;
+            if (layerControl) {
+                layerControl.addOverlay(layer, layerConfig.name);
+            }
+        }
+
+        // --- Gestione Layer Shapefile (.zip) ---
+        else if (layerConfig.type === 'shp') {
+            showToast(`Caricamento shapefile "${layerConfig.name}" in corso...`, 'info');
+            shp(layerConfig.url).then(geojson => {
+                const shpLayer = L.geoJSON(geojson, {
+                    pane: 'shapefilePane',
+                    style: () => layerConfig.style,
+                    onEachFeature: onEachFeaturePopup
+                });
+                loadedExternalLayers[layerId] = shpLayer;
                 if (layerControl) {
-                    layerControl.addOverlay(layer, layerConfig.name);
+                    layerControl.addOverlay(shpLayer, layerConfig.name);
                 }
-            }
-        });
+                showToast(`Shapefile "${layerConfig.name}" caricato.`, 'success');
+            }).catch(error => {
+                console.error(`Errore caricamento Shapefile ${layerConfig.name}:`, error);
+                showToast(`Errore caricamento Shapefile "${layerConfig.name}": ${error.message}`, 'error');
+            });
+        }
+    });
+}
+function findIntersections(boxId) {
+    const resultsContainer = document.getElementById('intersection-results');
+    resultsContainer.innerHTML = '<p>Calcolo in corso...</p>';
+
+    // 1. Ottieni la geometria del box selezionato
+    const boxLayer = gridLayers[boxId];
+    if (!boxLayer) {
+        resultsContainer.innerHTML = '<p>Errore: Box non trovato.</p>';
+        return;
     }
-    
-    loadedExternalLayers = newLoadedLayers;
+
+    // Converte il rettangolo Leaflet in un poligono GeoJSON per Turf.js
+    const bounds = boxLayer.getBounds();
+    const boxPolygon = turf.polygon([[
+        [bounds.getWest(), bounds.getSouth()],
+        [bounds.getEast(), bounds.getSouth()],
+        [bounds.getEast(), bounds.getNorth()],
+        [bounds.getWest(), bounds.getNorth()],
+        [bounds.getWest(), bounds.getSouth()]
+    ]]);
+
+    const intersectingCables = [];
+
+    // 2. Itera su tutti i layer esterni caricati
+    for (const layerId in loadedExternalLayers) {
+        const externalLayer = loadedExternalLayers[layerId];
+        // Assicurati che il layer sia di tipo GeoJSON (WFS, SHP, e GeoJSON lo sono)
+        if (externalLayer.toGeoJSON) {
+            const layerData = externalLayer.toGeoJSON();
+            // 3. Itera su ogni feature (es. ogni cavo) del layer
+            turf.featureEach(layerData, (feature) => {
+                // 4. Controlla l'intersezione tra il box e la feature
+                if (turf.booleanIntersects(boxPolygon, feature)) {
+                    // Se si intersecano, aggiungi le proprietà del cavo ai risultati
+                    intersectingCables.push(feature.properties);
+                }
+            });
+        }
+    }
+
+    // 5. Mostra i risultati
+    if (intersectingCables.length > 0) {
+        let html = '<ul>';
+        intersectingCables.forEach(props => {
+            // Estrai un nome o un ID significativo dalle proprietà.
+            // Potresti dover adattare 'Name', 'ID', 'nome' a seconda dei tuoi dati.
+            const displayName = props.NOBJNM || props.Name || 'Cavo senza nome';
+            html += `<li>${displayName}</li>`;
+        });
+        html += '</ul>';
+        resultsContainer.innerHTML = html;
+    } else {
+        resultsContainer.innerHTML = '<p>Nessun cavo interseca questo box.</p>';
+    }
 }
 function loadShapefileWithShpJs(layerConfig, layerId, newLoadedLayers) {
     // Verifica che shp sia disponibile
@@ -866,6 +1035,10 @@ function updateDashboardStats() {
     const todayString = new Date().toISOString().split('T')[0];
     const logsToday = allLogs.filter(log => log.log_timestamp.startsWith(todayString)).length;
     document.getElementById('stat-today').textContent = logsToday;
+}
+function toggleAuthFields() {
+    const authType = document.getElementById('layer-auth-type').value;
+    document.getElementById('basic-auth-fields').style.display = (authType === 'basic') ? 'block' : 'none';
 }
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');
