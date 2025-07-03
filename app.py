@@ -11,7 +11,7 @@ from datetime import datetime
 app = Flask(__name__)
 sock = Sock(app)
 DATABASE = 'storage/database.db'
-CONFIG_FILE = 'config.json'
+CONFIG_FILE = 'storage/config.json'
 clients = []
 
 # --- GESTIONE DATABASE ---
@@ -202,15 +202,19 @@ def reset_logs():
 
 # BLOCCO DI AVVIO SERVER
 if __name__ == '__main__':
+    # Crea la cartella 'storage' se non esiste (per lo sviluppo locale)
+    if not os.path.exists('storage'):
+        os.makedirs('storage')
+        
     # Crea un file di configurazione di default se non esiste al primo avvio
     if not os.path.exists(CONFIG_FILE):
         print(f"File '{CONFIG_FILE}' non trovato. Creazione di una configurazione di default.")
         default_config = {
-            "grid_bounds": {"lat_start": 46.5, "lon_start": 12.0, "lat_end": 40.0, "lon_end": 20.0},
+            "grid_bounds": {"lat_start": 46, "lon_start": 5.7, "lat_end": 32, "lon_end": 24},
             "base_map": {"url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": "&copy; OpenStreetMap contributors"},
             "external_layers": []
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(default_config, f, indent=4)
-            
+
     app.run(debug=True, host='0.0.0.0', port=5000)

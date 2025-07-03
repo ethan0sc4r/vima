@@ -4,25 +4,27 @@ FROM python:3.11-slim
 # Imposta la directory di lavoro all'interno del container
 WORKDIR /app
 
-# Copia il file dei requisiti prima del resto del codice per ottimizzare la cache
-COPY requirements.txt .
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget nano && \
+    rm -rf /var/lib/apt/lists/*
 
-# Installa le dipendenze Python
+# Aggiungi il flag --trusted-host per ambienti con proxy SSL
+COPY requirements.txt .
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
 
-# Copia i file principali dalla root del progetto alla root dell'app nel container
-COPY app.py config.json schema.sql database.py ./
-
-# Copia l'intera cartella 'templates' e il suo contenuto
+# Copia i file dell'applicazione
+COPY app.py schema.sql database.py ./
 COPY templates/ /app/templates/
-
-# Copia l'intera cartella 'static' con tutte le sue sottocartelle
-# (css, js, images, geojson, shapefiles, etc.)
 COPY static/ /app/static/
 
+# Copia il config.json direttamente nella cartella /app/storage/
+COPY config.json /app/storage/config.json
+
 # Esegue lo script per creare il database nella cartella 'storage'
-# (come da nostra precedente modifica a database.py)
 RUN python database.py
+
+# Concedi i permessi di scrittura all'intera cartella 'storage'
+RUN chmod -R g+w /app/storage
 
 # Esponi la porta su cui Gunicorn eseguirà l'applicazione
 EXPOSE 5000
