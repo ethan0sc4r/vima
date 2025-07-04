@@ -30,7 +30,8 @@
                 "fillOpacity": 0.2
             },
             "typeName": "CBLSUB",
-            "authentication": "none"
+            "authentication": "none",
+            "protected": true
         }
     ],
     "grid_bounds": {

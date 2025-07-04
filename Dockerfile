@@ -4,26 +4,29 @@ FROM python:3.11-slim
 # Imposta la directory di lavoro all'interno del container
 WORKDIR /app
 
+# Installa gli strumenti di sistema richiesti (opzionale)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wget nano && \
     rm -rf /var/lib/apt/lists/*
 
-# Aggiungi il flag --trusted-host per ambienti con proxy SSL
+# Copia e installa le dipendenze Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
 
-# Copia i file dell'applicazione
-COPY app.py schema.sql database.py ./
+# Copia i file dell'applicazione e le cartelle principali
+COPY app.py config.json schema.sql database.py ./
+COPY config.json /app/storage/
 COPY templates/ /app/templates/
 COPY static/ /app/static/
 
-# Copia il config.json direttamente nella cartella /app/storage/
-COPY config.json /app/storage/config.json
+# Crea le sottocartelle necessarie all'interno di /app/storage
+RUN mkdir -p /app/storage/shapefiles && \
+    mkdir -p /app/storage/geojson
 
-# Esegue lo script per creare il database nella cartella 'storage'
+# Esegue lo script per creare il database, che verrà salvato in /app/storage/
 RUN python database.py
 
-# Concedi i permessi di scrittura all'intera cartella 'storage'
+# Concedi i permessi di scrittura all'intera cartella 'storage' per la compatibilità con OpenShift
 RUN chmod -R g+w /app/storage
 
 # Esponi la porta su cui Gunicorn eseguirà l'applicazione
