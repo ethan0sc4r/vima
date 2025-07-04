@@ -5,14 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mappa Web App</title>
 
-    <!-- Caricamento delle librerie dalla cartella 'static' -->
+    <!-- Caricamento delle librerie -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/leaflet.css') }}"/>
     <script src="{{ url_for('static', filename='js/leaflet.js') }}"></script>
     <script src="{{ url_for('static', filename='js/shp.js') }}"></script>
     <script src="{{ url_for('static', filename='js/catiline.js') }}"></script>
     <script src="{{ url_for('static', filename='js/leaflet.shpfile.js') }}"></script>
-    <script src='https://cdn.jsdelivr.net/npm/@turf/turf@latest/turf.min.js'></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src='https://cdn.jsdelivr.net/npm/@turf/turf@latest/turf.min.js'></script>
+    <!-- LIBRERIE PER ESPORTAZIONE PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     
     <style>
         html, body { height: 100%; margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; }
@@ -82,20 +85,7 @@
         .log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .log-table th, .log-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
         .log-table thead { position: sticky; top: 0; background-color: #e9ecef; z-index: 1; }
-        .grid-label {
-            background: transparent;
-            border: none;
-            box-shadow: none;
-            color: rgba(0, 0, 0, 0.7);
-            font-size: 15px;
-            font-weight: bold;
-            text-align: center;
-            pointer-events: none; /* Fa in modo che i click passino attraverso l'etichetta */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            white-space: nowrap;
-        }
+        .grid-label { background: transparent; border: none; box-shadow: none; color: rgba(0, 0, 0, 0.7); font-size: 9px; font-weight: bold; text-align: center; pointer-events: none; display: flex; justify-content: center; align-items: center; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -109,10 +99,24 @@
         <button class="fab fab-log" title="Aggiungi Log" onclick="openModal('modal-log-entry')">✎</button>
         <button class="fab" style="background-color: #9E9E9E;" title="Gestione Log Completa" onclick="openLogManager()">🗂️</button>
         <button class="fab fab-dashboard" title="Cruscotto Analitico" onclick="openDashboard()">📊</button>
+        <button class="fab" style="background-color: #795548;" title="Report Cavi" onclick="openCableReport()">📄</button>
         <button class="fab fab-data" title="Import/Export Dati" onclick="openModal('modal-data-manage')">💾</button>
         <button class="fab fab-filter" title="Filtri Visualizzazione" onclick="openModal('modal-filter')">▼</button>
         <button class="fab fab-layers" title="Gestione Layer" onclick="openLayerManager()">📜</button>
     </div>
+
+    <div id="modal-cable-report" class="modal-overlay" onclick="closeAllModals()">
+        <div class="modal-content" style="max-width: 900px;" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeAllModals()">&times;</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h4>Report Intersezioni per Cavo</h4>
+                <button class="btn-export-log" onclick="exportCableReportToPDF()">Esporta in PDF</button>
+            </div>
+            <div id="cable-report-container" class="log-manager-table-container" style="max-height: 70vh;">
+            </div>
+        </div>
+    </div>
+
     <div id="modal-log-manager" class="modal-overlay" onclick="closeAllModals()">
         <div class="modal-content" onclick="event.stopPropagation()">
             <span class="modal-close" onclick="closeAllModals()">&times;</span>
@@ -134,7 +138,7 @@
                 </div>
                 <div class="log-manager-table-container">
                     <table class="log-table">
-                       <thead>
+                        <thead>
                             <tr>
                                 <th><input type="checkbox" onchange="toggleSelectAll(this)"></th>
                                 <th>Data/Ora</th>
@@ -142,7 +146,7 @@
                                 <th>Nave</th>
                                 <th>Colore</th>
                                 <th>Import ID</th>
-                                <th>Cavi Intersecati</th> 
+                                <th>Cavi Intersecati</th>
                             </tr>
                         </thead>
                         <tbody id="log-table-body"></tbody>
@@ -159,7 +163,7 @@
                 <label for="history-years">Ultimi:</label>
                 <input type="number" id="history-years" value="1" min="1" style="width: 60px; padding: 5px;">
                 <label>anni</label>
-                <button id="history-show-btn" class="btn-main-action">Mostra</button>
+                <button id="history-show-btn" class="btn-main-action">Mostra Storico</button>
             </div>
         </div>
         <div id="history-content" class="panel-content"><p>Clicca su un box per vederne lo storico.</p></div>
@@ -210,11 +214,11 @@
                     <div class="control-group"><label for="boxInput">ID Box</label><input type="text" id="boxInput" placeholder="AA-01"></div>
                     <div class="control-group"><label for="dateInput">Data</label><input type="date" id="dateInput"></div>
                 </div>
-                <!-- NUOVO CAMPO PER L'ORARIO -->
                 <div class="grid-layout" style="margin-top: 10px;">
                     <div class="control-group"><label for="timeInput">Orario (HH:MM)</label><input type="time" id="timeInput"></div>
                     <div class="control-group"><label for="shipInput">Nave</label><input type="text" id="shipInput" placeholder="Nome Nave"></div>
                 </div>
+                <!-- Il campo Utente è stato rimosso -->
                 <div class="control-group" style="margin-top: 15px;">
                     <label>Colore Riempimento</label>
                     <div class="color-selector">
@@ -271,37 +275,37 @@
                     <label for="layer-type">Tipo di Layer</label>
                     <select id="layer-type" onchange="toggleLayerFormFields()">
                         <option value="wms">WMS</option>
-                        <option value="wfs">WFS</option> 
+                        <option value="wfs">WFS</option>
                         <option value="shp">Shapefile (.zip)</option>
                         <option value="geojson">GeoJSON</option>
                     </select>
                 </div>
                 <div class="control-group" style="margin-bottom: 10px;"><label for="layer-name">Nome Visualizzato</label><input type="text" id="layer-name" required></div>
-                <div class="control-group" style="margin-bottom: 10px;"><label for="layer-url">URL (WMS) o Percorso File (SHP/GeoJSON)</label><input type="text" id="layer-url" required></div>
+                <div class="control-group" style="margin-bottom: 10px;"><label for="layer-url">URL</label><input type="text" id="layer-url" required></div>
                 <div id="wms-fields" class="control-group" style="margin-bottom: 10px;"><label for="wms-layers">Nome Tecnico Layer WMS</label><input type="text" id="wms-layers"></div>
                 <div id="wfs-fields" class="control-group" style="margin-bottom: 10px; display: none;">
                     <label for="wfs-typename">Nome Feature Type (es. ns:nome_layer)</label>
                     <input type="text" id="wfs-typename">
                 </div>
                 <div id="auth-fields-container" style="display: none; border-top: 1px solid #eee; padding-top: 15px; margin-top: 10px;">
-                <div class="control-group" style="margin-bottom: 10px;">
-                    <label for="layer-auth-type">Tipo di Autenticazione</label>
-                    <select id="layer-auth-type" onchange="toggleAuthFields()">
-                        <option value="none">Nessuna</option>
-                        <option value="basic">Basic (Username/Password)</option>
-                    </select>
-                </div>
-                <div id="basic-auth-fields" style="display: none;">
                     <div class="control-group" style="margin-bottom: 10px;">
-                        <label for="layer-username">Username</label>
-                        <input type="text" id="layer-username" autocomplete="off">
+                        <label for="layer-auth-type">Tipo di Autenticazione</label>
+                        <select id="layer-auth-type" onchange="toggleAuthFields()">
+                            <option value="none">Nessuna</option>
+                            <option value="basic">Basic (Username/Password)</option>
+                        </select>
                     </div>
-                    <div class="control-group" style="margin-bottom: 10px;">
-                        <label for="layer-password">Password</label>
-                        <input type="password" id="layer-password" autocomplete="new-password">
+                    <div id="basic-auth-fields" style="display: none;">
+                         <div class="control-group" style="margin-bottom: 10px;">
+                            <label for="layer-username">Username</label>
+                            <input type="text" id="layer-username" autocomplete="off">
+                        </div>
+                         <div class="control-group" style="margin-bottom: 10px;">
+                            <label for="layer-password">Password</label>
+                            <input type="password" id="layer-password" autocomplete="new-password">
+                        </div>
                     </div>
                 </div>
-            </div>
                 <div class="control-group" style="margin-bottom: 10px;"><label for="layer-color">Colore (es. #ff0000)</label><input type="text" id="layer-color" value="#ff8c00"></div>
                 <div class="control-group" style="margin-bottom: 10px;"><label for="layer-weight">Spessore Linea</label><input type="number" id="layer-weight" value="2" min="1"></div>
             </form>

@@ -2,13 +2,15 @@
 let map;
 let layerControl;
 let gridLayerGroup;
+let gridLabelsLayerGroup;
 let tuttiDatiLog = {};
 let gridLayers = {};
 let config = {};
 let colorChartInstance = null, shipChartInstance = null;
 let loadedExternalLayers = {};
 let intersectionCache = {};
-let gridLabelsLayerGroup;
+let cableReportCache = {};
+
 // Costanti globali
 const boxSize = 10 / 60;
 const GIORNI_BORDO_GIALLO = 15;
@@ -45,211 +47,6 @@ function openModal(modalId) {
     const modal = document.getElementById(modalId);
     if(modal) modal.classList.add('visible');
 }
-async function openLogManager() {
-    renderLogTable();
-    await populateImportSelect();
-    openModal('modal-log-manager');
-}
-/**
- * Popola il menu a tendina per l'eliminazione dei batch di importazione.
- */
-async function populateImportSelect() {
-    try {
-        const response = await fetch('/api/imports');
-        if (!response.ok) throw new Error('Errore di rete nel fetch degli imports');
-        const imports = await response.json();
-        const select = document.getElementById('import-select');
-        if (!select) return;
-
-        select.innerHTML = '<option value="">Seleziona un batch...</option>';
-        imports.forEach(importId => {
-            select.innerHTML += `<option value="${importId}">${importId}</option>`;
-        });
-    } catch (error) {
-        console.error("Errore nel caricamento dei batch di importazione:", error);
-        showToast("Errore caricamento batch di importazione", 'error');
-    }
-}
-/**
- * Applica i filtri alla tabella di gestione dei log.
- */
-function applyLogTableFilters() {
-    const dateFilter = document.getElementById('log-table-filter-date').value;
-    const shipFilter = document.getElementById('log-table-filter-ship').value.toLowerCase();
-    const colorFilter = document.getElementById('log-table-filter-color').value;
-
-    const allLogs = Object.values(tuttiDatiLog).flat();
-
-    const filteredLogs = allLogs.filter(log => {
-        const shipMatch = !shipFilter || log.ship.toLowerCase().includes(shipFilter);
-        const dateMatch = !dateFilter || log.log_timestamp.startsWith(dateFilter);
-        const colorMatch = !colorFilter || log.color_code === colorFilter;
-        return shipMatch && dateMatch && colorMatch;
-    });
-
-    renderLogTable(filteredLogs);
-}
-/**
- * Seleziona o deseleziona tutte le checkbox nella tabella dei log.
- * @param {HTMLInputElement} masterCheckbox - La checkbox "seleziona tutto".
- */
-function toggleSelectAll(masterCheckbox) {
-    const checkboxes = document.querySelectorAll('#log-table-body .log-select-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = masterCheckbox.checked;
-    });
-}
-
-/**
- * Elimina tutti i log associati a un batch di importazione selezionato.
- */
-async function deleteSelectedImport() {
-    const importId = document.getElementById('import-select').value;
-    if (!importId) {
-        showToast('Seleziona un batch di importazione da eliminare.', 'error');
-        return;
-    }
-    if (confirm(`Sei sicuro di voler eliminare tutti i log dall'import "${importId}"? L'azione è irreversibile.`)) {
-        await fetch('/api/logs/batch_delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ import_id: importId })
-        });
-        // La notifica WebSocket gestirà il ricaricamento
-    }
-}
-
-/**
- * Elimina tutti i log attualmente selezionati nella tabella.
- */
-async function deleteSelectedLogs() {
-    const selectedIds = Array.from(document.querySelectorAll('#log-table-body .log-select-checkbox:checked')).map(cb => cb.value);
-    if (selectedIds.length === 0) {
-        showToast('Nessun log selezionato.', 'error');
-        return;
-    }
-    if (confirm(`Sei sicuro di voler eliminare i ${selectedIds.length} log selezionati? L'azione è irreversibile.`)) {
-         await fetch('/api/logs/batch_delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ log_ids: selectedIds })
-        });
-        // La notifica WebSocket gestirà il ricaricamento
-    }
-}
-
-/**
- * Esporta i log attualmente visibili nella tabella in un file CSV.
- */
-function exportVisibleLogs() {
-    const headers = ["Timestamp", "Box", "Nave", "Colore", "Import ID"];
-    const rows = Array.from(document.querySelectorAll('#log-table-body tr'));
-
-    if (rows.length === 0 || rows[0].cells.length < 2) {
-        showToast('Nessun dato da esportare.', 'info');
-        return;
-    }
-
-    let csvContent = headers.join(";") + "\n";
-    rows.forEach(row => {
-        // Estrae il testo da ogni cella, partendo dalla seconda (indice 1)
-        const rowData = Array.from(row.cells).slice(1).map(cell => `"${cell.innerText.replace(/"/g, '""')}"`);
-        csvContent += rowData.join(";") + "\n";
-    });
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "log_visibili_export.csv";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-}
-
-/**
- * Resetta i filtri della tabella di gestione log e la ri-renderizza.
- */
-function resetLogTableFilters() {
-    document.getElementById('log-table-filter-date').value = '';
-    document.getElementById('log-table-filter-ship').value = '';
-    document.getElementById('log-table-filter-color').value = '';
-    document.querySelector('#log-table-body input[type="checkbox"]').checked = false; // Deseleziona il master checkbox
-    renderLogTable();
-}
-async function precomputeAllIntersections() {
-    showToast('Calcolo intersezioni geospaziali in corso...', 'info');
-    
-    // Raccoglie tutte le feature (cavi) da tutti i layer vettoriali caricati
-    const allCableFeatures = [];
-    for (const layerId in loadedExternalLayers) {
-        const externalLayer = loadedExternalLayers[layerId];
-        if (externalLayer.toGeoJSON) {
-            const layerData = externalLayer.toGeoJSON();
-            allCableFeatures.push(...layerData.features);
-        }
-    }
-
-    if (allCableFeatures.length === 0) {
-        showToast('Nessun layer di cavi trovato per l\'analisi.', 'info');
-        return;
-    }
-    
-    // Itera su ogni box della griglia
-    for (const boxId in gridLayers) {
-        const boxLayer = gridLayers[boxId];
-        const bounds = boxLayer.getBounds();
-        const boxPolygon = turf.polygon([[
-            [bounds.getWest(), bounds.getSouth()],
-            [bounds.getEast(), bounds.getSouth()],
-            [bounds.getEast(), bounds.getNorth()],
-            [bounds.getWest(), bounds.getNorth()],
-            [bounds.getWest(), bounds.getSouth()]
-        ]]);
-
-        const intersectingCables = [];
-        // Confronta il box con ogni cavo
-        for (const cableFeature of allCableFeatures) {
-            if (turf.booleanIntersects(boxPolygon, cableFeature)) {
-                const props = cableFeature.properties;
-                // Estrai un nome significativo, personalizzalo se necessario
-                const displayName = props.NOBJNM || props.Name || props.ID || props.nome || props.NOME_UFFICIALE || 'Cavo senza nome';
-                intersectingCables.push(displayName);
-            }
-        }
-        
-        // Salva il risultato (anche se vuoto) nella cache
-        intersectionCache[boxId] = intersectingCables;
-    }
-
-    console.log("Pre-calcolo intersezioni completato.", intersectionCache);
-    showToast('Analisi intersezioni completata!', 'success');
-}
-/**
- * Renderizza la tabella nel modal di gestione log.
- * @param {Array} [logs] - Un array opzionale di log da visualizzare. Se non fornito, usa tutti i log globali.
- */
-function renderLogTable(logs) {
-    const tableBody = document.getElementById('log-table-body');
-    if (!tableBody) return;
-
-    const logList = logs || Object.values(tuttiDatiLog).flat().sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
-
-    tableBody.innerHTML = logList.map(log => {
-    const intersections = intersectionCache[log.box_id] || [];
-    const cablesText = intersections.join(', ') || '-'; // Unisce i nomi con una virgola
-    return `
-            <tr data-log-id="${log.id}">
-                <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
-                <td>${log.log_timestamp}</td>
-                <td>${log.box_id}</td>
-                <td>${log.ship}</td>
-                <td><span style="color:${COLOR_MAP[log.color_code] || '#808080'}; font-size: 1.2em;">●</span></td>
-                <td>${log.import_id || 'manual'}</td>
-                <td>${cablesText}</td> </tr>
-        `;
-    }).join('') || '<tr><td colspan="7" style="text-align:center;">Nessun log.</td></tr>';
-}
-
 function closeAllModals() {
     document.querySelectorAll('.modal-overlay').forEach(modal => modal.classList.remove('visible'));
     closeHistoryPanel();
@@ -331,7 +128,6 @@ async function disegnaGriglia(bounds) {
         await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newConfig) });
     }
     
-    // Pulisci sia la griglia che le etichette
     gridLayerGroup.clearLayers();
     gridLabelsLayerGroup.clearLayers();
     gridLayers = {};
@@ -348,28 +144,23 @@ async function disegnaGriglia(bounds) {
             const boxId = `${rowLabel}-${colLabel}`;
             const rectBounds = [[lat, lon], [lat - boxSize, lon + boxSize]];
             
-            // Crea il rettangolo del box
             const rectangle = L.rectangle(rectBounds, styleDefault).bindTooltip(`<b>ID Box:</b> ${boxId}`);
             rectangle.on('click', () => handleBoxClick(boxId));
             gridLayerGroup.addLayer(rectangle);
             gridLayers[boxId] = rectangle;
 
-            // --- INIZIO CODICE PER LE ETICHETTE ---
-            // Calcola il centro del box
             const centerLat = lat - boxSize / 2;
             const centerLon = lon + boxSize / 2;
             
-            // Crea un marcatore di testo usando L.divIcon
             const label = L.marker([centerLat, centerLon], {
                 icon: L.divIcon({
-                    className: 'grid-label', // Classe CSS per lo stile
+                    className: 'grid-label',
                     html: `<span>${boxId}</span>`,
-                    iconSize: [40, 10] // Dimensioni dell'icona
+                    iconSize: [40, 10]
                 }),
-                interactive: false // Rende l'etichetta non cliccabile
+                interactive: false
             });
             gridLabelsLayerGroup.addLayer(label);
-            // --- FINE CODICE PER LE ETICHETTE ---
 
             relativeColIndex++;
         }
@@ -389,15 +180,14 @@ function handleBoxClick(boxId) {
     document.getElementById('history-title').innerText = `Storico Box: ${boxId}`;
     document.getElementById('history-content').innerHTML = `<p style="padding: 15px;">Seleziona un periodo e clicca "Mostra Storico".</p>`;
     
-    // Collega il pulsante dello storico
     const showBtn = document.getElementById('history-show-btn');
     showBtn.onclick = () => renderHistory(boxId);
     
     displayIntersectionResults(boxId); 
-
+    
     openHistoryPanel();
-     
 }
+
 function displayIntersectionResults(boxId) {
     const resultsContainer = document.getElementById('intersection-results');
     const intersectingCables = intersectionCache[boxId] || [];
@@ -408,6 +198,7 @@ function displayIntersectionResults(boxId) {
         resultsContainer.innerHTML = '<p>Nessuna intersezione trovata.</p>';
     }
 }
+
 function renderHistory(boxId) {
     const historyContent = document.getElementById('history-content');
     const years = parseInt(document.getElementById('history-years').value, 10);
@@ -455,10 +246,7 @@ function renderHistory(boxId) {
         `;
     });
 
-    tableHTML += `
-            </tbody>
-        </table>
-    `;
+    tableHTML += `</tbody></table>`;
     historyContent.innerHTML = tableHTML;
 }
 
@@ -471,9 +259,10 @@ function openEditLogModal(log) {
     document.getElementById('boxInput').value = log.box_id;
     document.getElementById('boxInput').readOnly = true;
     document.getElementById('dateInput').value = datePart;
-    document.getElementById('timeInput').value = timePart || '00:00'; // Gestisce timestamp senza orario
+    document.getElementById('timeInput').value = timePart || '00:00';
  
     document.getElementById('shipInput').value = log.ship;
+    document.getElementById('userInput').value = log.user || '';
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
     openModal('modal-log-entry');
 }
@@ -494,11 +283,15 @@ async function saveLog() {
     const time = document.getElementById('timeInput').value;
     const boxData = {
         boxId: document.getElementById('boxInput').value.toUpperCase(),
-        timestamp: `${date} ${time}`, // Combina data e ora
+        timestamp: `${date} ${time}`,
         ship: document.getElementById('shipInput').value,
+        user: document.getElementById('userInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
-    if (!boxData.boxId || !date || !time || !boxData.ship) { showToast("Tutti i campi sono obbligatori.", 'error'); return; }
+    if (!boxData.boxId || !date || !time || !boxData.ship || !boxData.user) { 
+        showToast("Tutti i campi sono obbligatori, incluso l'utente.", 'error'); 
+        return; 
+    }
     if (!gridLayers[boxData.boxId]) { showToast(`L'ID Box "${boxData.boxId}" non esiste sulla mappa.`, 'error'); return; }
     
     const url = logId ? `/api/logs/${logId}` : '/api/logs';
@@ -599,10 +392,10 @@ function triggerCSVDownload(csvContent, fileName) {
 function esportaLogCSV() {
     const boxIds = Object.keys(tuttiDatiLog);
     if (boxIds.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
-    let csvContent = "Timestamp;Box;Nave;Colore\n";
+    let csvContent = "Timestamp;Box;Nave;Colore;User\n";
     boxIds.forEach(boxId => {
         tuttiDatiLog[boxId].forEach(data => {
-            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code}\n`;
+            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code};${data.user}\n`;
         });
     });
     triggerCSVDownload(csvContent, "mappa_log_export.csv");
@@ -612,24 +405,21 @@ function processCSV(event) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (e) => {
-        const righe = e.target.result.split('\n');
-        let importati = 0;
-        for (const riga of righe) {
-            if (!riga.trim() || riga.toLowerCase().startsWith('timestamp;box')) continue;
-            const parts = riga.split(';');
-            if (parts.length >= 4) {
-                const [timestamp, boxId, ship, colorCode] = parts.map(p => p.trim());
-                const [date, time] = timestamp.split(' ');
-                const boxData = { date, time, boxId: boxId.toUpperCase(), ship, colorCode };
-                if (gridLayers[boxData.boxId]) {
-                    await fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(boxData) });
-                    importati++;
-                }
-            }
+        const csvContent = e.target.result;
+        try {
+            const response = await fetch('/api/logs/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                body: csvContent
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Errore del server');
+        } catch (error) {
+            console.error("Errore durante l'importazione del CSV:", error);
+            showToast(`Errore importazione CSV: ${error.message}`, 'error');
         }
-        showToast(`${importati} righe inviate per l'importazione.`, 'success');
     };
-    reader.readAsText(file);
+    reader.readAsText(file, "UTF-8");
     event.target.value = '';
     closeAllModals();
 }
@@ -648,7 +438,7 @@ function renderLayerManagerList() {
             const item = document.createElement('div');
             item.className = 'layer-item';
             item.innerHTML = `
-                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${map.hasLayer(loadedExternalLayers[layerId]) ? '👁️' : '⚪'}</span>
+                <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${loadedExternalLayers[layerId] && map.hasLayer(loadedExternalLayers[layerId]) ? '👁️' : '⚪'}</span>
                 <div class="reorder-arrows"><span onclick="reorderLayer(${index}, -1)">▲</span><span onclick="reorderLayer(${index}, 1)">▼</span></div>
                 <span class="layer-name">${layer.name} (${layer.type.toUpperCase()})</span>
                 <div class="layer-actions"><span title="Modifica Layer" onclick="openEditLayerModal(${index})">✎</span><span title="Cancella Layer" onclick="deleteLayer(${index})">🗑️</span></div>`;
@@ -688,20 +478,19 @@ function openEditLayerModal(index) {
     document.getElementById('layer-color').value = layer.style.color;
     document.getElementById('layer-weight').value = layer.style.weight;
 
-    // Popola i campi specifici per WMS e autenticazione
     if (layer.type === 'wms') {
         document.getElementById('wms-layers').value = layer.layers || '';
         document.getElementById('layer-auth-type').value = layer.authentication || 'none';
         document.getElementById('layer-username').value = layer.username || '';
         document.getElementById('layer-password').value = layer.password || '';
-    }  else if (layer.type === 'wfs') { // AGGIUNGI QUESTO BLOCCO
+    } else if (layer.type === 'wfs') {
         document.getElementById('wfs-typename').value = layer.typeName || '';
         document.getElementById('layer-auth-type').value = layer.authentication || 'none';
         document.getElementById('layer-username').value = layer.username || '';
         document.getElementById('layer-password').value = layer.password || '';
     }
-        
-    toggleLayerFormFields(); // Aggiorna la visibilità di tutti i campi
+    
+    toggleLayerFormFields();
     openModal('modal-add-edit-layer');
 }
 function toggleLayerFormFields() {
@@ -709,16 +498,23 @@ function toggleLayerFormFields() {
     const isWMS = type === 'wms';
     const isWFS = type === 'wfs';
 
-    // Gestione campi WMS
-    document.getElementById('wms-fields').style.display = isWMS ? 'flex' : 'none';
-    document.getElementById('auth-fields-container').style.display = (isWMS || isWFS) ? 'block' : 'none';
+    const wmsFields = document.getElementById('wms-fields');
+    if (wmsFields) wmsFields.style.display = isWMS ? 'flex' : 'none';
     
-    // Gestione campi WFS
-    document.getElementById('wfs-fields').style.display = isWFS ? 'flex' : 'none';
+    const authContainer = document.getElementById('auth-fields-container');
+    if (authContainer) authContainer.style.display = (isWMS || isWFS) ? 'block' : 'none';
+    
+    const wfsFields = document.getElementById('wfs-fields');
+    if (wfsFields) wfsFields.style.display = isWFS ? 'flex' : 'none';
     
     if (isWMS || isWFS) {
         toggleAuthFields();
     }
+}
+function toggleAuthFields() {
+    const authType = document.getElementById('layer-auth-type').value;
+    const basicAuthFields = document.getElementById('basic-auth-fields');
+    if(basicAuthFields) basicAuthFields.style.display = (authType === 'basic') ? 'block' : 'none';
 }
 async function saveLayer() {
     const index = parseInt(document.getElementById('layer-index-input').value, 10);
@@ -743,22 +539,13 @@ async function saveLayer() {
             layerData.username = document.getElementById('layer-username').value;
             layerData.password = document.getElementById('layer-password').value;
         }
-    } else if (layerData.type === 'wfs') { // AGGIUNGI QUESTO BLOCCO
+    } else if (layerData.type === 'wfs') {
         layerData.typeName = document.getElementById('wfs-typename').value;
         const authType = document.getElementById('layer-auth-type').value;
         layerData.authentication = authType;
         if (authType === 'basic') {
             layerData.username = document.getElementById('layer-username').value;
             layerData.password = document.getElementById('layer-password').value;
-        }
-    }
-        
-    // Validazione specifica per shapefile
-    if (layerData.type === 'shp') {
-        const validation = validateShapefileUrl(layerData.url);
-        if (!validation.valid) {
-            showToast(validation.message, 'error');
-            return;
         }
     }
     
@@ -788,12 +575,7 @@ async function saveConfigAndReload() {
     showToast("Configurazione dei layer salvata. La pagina verrà ricaricata.", 'success');
     setTimeout(() => window.location.reload(), 1500);
 }
-/**
- * Pulisce i layer esterni esistenti e carica quelli nuovi dalla configurazione.
- * Restituisce un array di "promesse" per i caricamenti asincroni (WFS, GeoJSON, SHP).
- */
 function loadExternalLayers() {
-    // 1. Rimuove i layer esterni esistenti dalla mappa e dal controllo layer
     for (const key in loadedExternalLayers) {
         if (map.hasLayer(loadedExternalLayers[key])) {
             map.removeLayer(loadedExternalLayers[key]);
@@ -806,12 +588,11 @@ function loadExternalLayers() {
     loadedExternalLayers = {};
 
     if (!config.external_layers) {
-        return []; // Non ci sono layer da caricare
+        return [];
     }
     
-    const promises = []; // Array per tracciare i caricamenti asincroni
+    const promises = [];
 
-    // Funzione helper per creare i popup con le proprietà delle feature
     const onEachFeaturePopup = (feature, layer) => {
         if (feature.properties) {
             let popupContent = '<div style="max-height: 200px; overflow-y: auto;"><b>Proprietà:</b><br>';
@@ -823,12 +604,10 @@ function loadExternalLayers() {
         }
     };
 
-    // 3. Itera sulla configurazione e crea i nuovi layer
     config.external_layers.forEach((layerConfig, index) => {
         const layerId = `${layerConfig.type}-${index}`;
         let layer;
 
-        // --- Gestione Layer WMS (Web Map Service) ---
         if (layerConfig.type === 'wms') {
             const proxyUrl = `/api/wms_proxy`;
             layer = L.tileLayer.wms(proxyUrl, {
@@ -841,8 +620,6 @@ function loadExternalLayers() {
             loadedExternalLayers[layerId] = layer;
             layerControl.addOverlay(layer, layerConfig.name);
         }
-
-        // --- Gestione Layer WFS (Web Feature Service) ---
         else if (layerConfig.type === 'wfs') {
             layer = L.geoJSON(null, {
                 pane: 'shapefilePane',
@@ -873,10 +650,8 @@ function loadExternalLayers() {
             
             loadedExternalLayers[layerId] = layer;
             layerControl.addOverlay(layer, layerConfig.name);
-            promises.push(promise); // Aggiungi la promessa di caricamento
+            promises.push(promise);
         }
-        
-        // --- Gestione Layer GeoJSON ---
         else if (layerConfig.type === 'geojson') {
             layer = L.geoJSON(null, {
                 pane: 'shapefilePane',
@@ -897,10 +672,8 @@ function loadExternalLayers() {
             
             loadedExternalLayers[layerId] = layer;
             layerControl.addOverlay(layer, layerConfig.name);
-            promises.push(promise); // Aggiungi la promessa di caricamento
+            promises.push(promise);
         }
-
-        // --- Gestione Layer Shapefile (.zip) ---
         else if (layerConfig.type === 'shp') {
             showToast(`Caricamento shapefile "${layerConfig.name}" in corso...`, 'info');
             const promise = shp(layerConfig.url).then(geojson => {
@@ -916,161 +689,75 @@ function loadExternalLayers() {
                 console.error(`Errore caricamento Shapefile ${layerConfig.name}:`, error);
                 showToast(`Errore caricamento Shapefile "${layerConfig.name}": ${error.message}`, 'error');
             });
-            promises.push(promise); // Aggiungi la promessa di caricamento
+            promises.push(promise);
         }
     });
 
-    return promises; // Restituisce l'array di tutte le promesse asincrone
+    return promises;
 }
-function findIntersections(boxId) {
-    const resultsContainer = document.getElementById('intersection-results');
-    resultsContainer.innerHTML = '<p>Calcolo in corso...</p>';
 
-    // 1. Ottieni la geometria del box selezionato
-    const boxLayer = gridLayers[boxId];
-    if (!boxLayer) {
-        resultsContainer.innerHTML = '<p>Errore: Box non trovato.</p>';
-        return;
-    }
-
-    // Converte il rettangolo Leaflet in un poligono GeoJSON per Turf.js
-    const bounds = boxLayer.getBounds();
-    const boxPolygon = turf.polygon([[
-        [bounds.getWest(), bounds.getSouth()],
-        [bounds.getEast(), bounds.getSouth()],
-        [bounds.getEast(), bounds.getNorth()],
-        [bounds.getWest(), bounds.getNorth()],
-        [bounds.getWest(), bounds.getSouth()]
-    ]]);
-
-    const intersectingCables = [];
-
-    // 2. Itera su tutti i layer esterni caricati
+// --- 8. ANALISI GEOSPAZIALE ---
+async function precomputeAllIntersections() {
+    showToast('Calcolo intersezioni geospaziali in corso...', 'info');
+    
+    const allCableFeatures = [];
     for (const layerId in loadedExternalLayers) {
         const externalLayer = loadedExternalLayers[layerId];
-        // Assicurati che il layer sia di tipo GeoJSON (WFS, SHP, e GeoJSON lo sono)
         if (externalLayer.toGeoJSON) {
             const layerData = externalLayer.toGeoJSON();
-            // 3. Itera su ogni feature (es. ogni cavo) del layer
-            turf.featureEach(layerData, (feature) => {
-                // 4. Controlla l'intersezione tra il box e la feature
-                if (turf.booleanIntersects(boxPolygon, feature)) {
-                    // Se si intersecano, aggiungi le proprietà del cavo ai risultati
-                    intersectingCables.push(feature.properties);
-                }
-            });
+            allCableFeatures.push(...layerData.features);
         }
     }
 
-    // 5. Mostra i risultati
-    if (intersectingCables.length > 0) {
-        let html = '<ul>';
-        intersectingCables.forEach(props => {
-            // Estrai un nome o un ID significativo dalle proprietà.
-            // Potresti dover adattare 'Name', 'ID', 'nome' a seconda dei tuoi dati.
-            const displayName = props.NOBJNM || props.Name || 'Cavo senza nome';
-            html += `<li>${displayName}</li>`;
-        });
-        html += '</ul>';
-        resultsContainer.innerHTML = html;
-    } else {
-        resultsContainer.innerHTML = '<p>Nessun cavo interseca questo box.</p>';
-    }
-}
-function loadShapefileWithShpJs(layerConfig, layerId, newLoadedLayers) {
-    // Verifica che shp sia disponibile
-    if (typeof shp === 'undefined') {
-        console.error('shp.js non è caricato. Aggiungi: <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>');
-        showToast(`Impossibile caricare ${layerConfig.name}: libreria shp.js mancante`, 'error');
+    if (allCableFeatures.length === 0) {
+        showToast('Nessun layer di cavi trovato per l\'analisi.', 'info');
         return;
     }
     
-    console.log(`Caricamento shapefile: ${layerConfig.name} da ${layerConfig.url}`);
-    showToast(`Caricamento shapefile "${layerConfig.name}" in corso...`, 'info');
-    
-    // Carica il file shapefile
-    shp(layerConfig.url)
-        .then(function(geojson) {
-            console.log(`Shapefile ${layerConfig.name} convertito in GeoJSON:`, geojson);
-            
-            // Crea il layer GeoJSON dal shapefile
-            const layer = L.geoJSON(geojson, {
-                pane: 'shapefilePane',
-                style: function(feature) {
-                    return layerConfig.style;
-                },
-                onEachFeature: function(feature, layer) {
-                    if (feature.properties) {
-                        let popupContent = '<b>Proprietà Shapefile:</b><br>';
-                        for (const [key, value] of Object.entries(feature.properties)) {
-                            if (value !== null && value !== undefined && value !== '') {
-                                popupContent += `<b>${key}:</b> ${value}<br>`;
-                            }
-                        }
-                        layer.bindPopup(popupContent);
-                    }
-                }
-            });
-            
-            // Aggiungi il layer alla mappa
-            newLoadedLayers[layerId] = layer;
-            if (layerControl) {
-                layerControl.addOverlay(layer, layerConfig.name);
+    for (const boxId in gridLayers) {
+        const boxLayer = gridLayers[boxId];
+        const bounds = boxLayer.getBounds();
+        const boxPolygon = turf.polygon([[
+            [bounds.getWest(), bounds.getSouth()],
+            [bounds.getEast(), bounds.getSouth()],
+            [bounds.getEast(), bounds.getNorth()],
+            [bounds.getWest(), bounds.getNorth()],
+            [bounds.getWest(), bounds.getSouth()]
+        ]]);
+
+        const intersectingCables = [];
+        for (const cableFeature of allCableFeatures) {
+            if (turf.booleanIntersects(boxPolygon, cableFeature)) {
+                const props = cableFeature.properties;
+                const displayName = props.Name || props.ID || props.nome || props.NOME_UFFICIALE || 'Feature senza nome';
+                intersectingCables.push(displayName);
             }
-            
-            // Aggiorna il riferimento globale
-            loadedExternalLayers[layerId] = layer;
-            
-            showToast(`Shapefile "${layerConfig.name}" caricato con successo!`, 'success');
-            
-            // Opzionale: centra la mappa sul layer
-            if (layer.getBounds && layer.getBounds().isValid()) {
-                // map.fitBounds(layer.getBounds());
-            }
-        })
-        .catch(function(error) {
-            console.error(`Errore caricamento shapefile ${layerConfig.name}:`, error);
-            showToast(`Errore caricamento shapefile "${layerConfig.name}": ${error.message || 'Errore sconosciuto'}`, 'error');
-        });
-}
-function validateShapefileUrl(url) {
-    // Verifica che l'URL punti a un file ZIP
-    if (!url.toLowerCase().endsWith('.zip')) {
-        return {
-            valid: false,
-            message: 'Gli shapefile devono essere in formato ZIP contenente i file .shp, .shx, .dbf'
-        };
+        }
+        
+        intersectionCache[boxId] = intersectingCables;
     }
-    
-    try {
-        new URL(url);
-        return { valid: true };
-    } catch {
-        return {
-            valid: false,
-            message: 'URL non valido'
-        };
-    }
+
+    console.log("Pre-calcolo intersezioni completato.", intersectionCache);
+    showToast('Analisi intersezioni completata!', 'success');
 }
-// --- 8. DASHBOARD ---
+
+// --- 9. DASHBOARD E REPORT ---
 function renderExpiredLogsList() {
     const container = document.getElementById('expired-logs-list');
     const expiredBoxes = [];
     const oggi = new Date();
-    oggi.setHours(0, 0, 0, 0); // Normalizza la data di oggi per un confronto corretto
+    oggi.setHours(0, 0, 0, 0);
 
     for (const boxId in tuttiDatiLog) {
         const logsPerBox = tuttiDatiLog[boxId];
         if (logsPerBox && logsPerBox.length > 0) {
-            // Trova il log più recente per questo box
             const logPiuRecente = logsPerBox.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp))[0];
             
             const dataBox = new Date(logPiuRecente.log_timestamp);
-            dataBox.setHours(0, 0, 0, 0); // Normalizza anche la data del log
+            dataBox.setHours(0, 0, 0, 0);
 
             const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
 
-            // Se la differenza è maggiore di 30 giorni, lo aggiungiamo alla lista
             if (differenzaGiorni > GIORNI_BORDO_ROSSO) {
                 expiredBoxes.push({
                     boxId: boxId,
@@ -1085,25 +772,27 @@ function renderExpiredLogsList() {
         return;
     }
 
-    // Ordina i box scaduti per ID
     expiredBoxes.sort((a, b) => a.boxId.localeCompare(b.boxId));
 
     let html = '';
-    const intersections = intersectionCache[item.boxId] || [];
-    const cablesText = intersections.length > 0 ? `Cavi: ${intersections.join(', ')}` : 'Nessuna intersezione';
-    html += `
-        <div class="content-item" style="padding: 10px;">
-            <b>Box: ${item.boxId}</b><br>
-            <small>Ultimo log: ${item.log.log_timestamp}</small><br>
-            <small>Nave: ${item.log.ship}</small><br>
-            <small style="color: #007BFF;">${cablesText}</small> </div>
-    `;
+    expiredBoxes.forEach(item => {
+        const intersections = intersectionCache[item.boxId] || [];
+        const cablesText = intersections.length > 0 ? `Cavi: ${intersections.join(', ')}` : 'Nessuna intersezione';
+        html += `
+            <div class="content-item" style="padding: 10px;">
+                <b>Box: ${item.boxId}</b><br>
+                <small>Ultimo log: ${item.log.log_timestamp}</small><br>
+                <small>Nave: ${item.log.ship}</small><br>
+                <small style="color: #007BFF;">${cablesText}</small>
+            </div>
+        `;
+    });
     container.innerHTML = html;
 }
 function openDashboard() {
     updateDashboardStats();
     renderTodaysActivityDetail();
-    renderExpiredLogsList(); // <-- AGGIUNGI QUESTA RIGA
+    renderExpiredLogsList();
     createOrUpdateCharts();
     openModal('modal-dashboard');
 }
@@ -1113,10 +802,6 @@ function updateDashboardStats() {
     const todayString = new Date().toISOString().split('T')[0];
     const logsToday = allLogs.filter(log => log.log_timestamp.startsWith(todayString)).length;
     document.getElementById('stat-today').textContent = logsToday;
-}
-function toggleAuthFields() {
-    const authType = document.getElementById('layer-auth-type').value;
-    document.getElementById('basic-auth-fields').style.display = (authType === 'basic') ? 'block' : 'none';
 }
 function renderTodaysActivityDetail() {
     const container = document.getElementById('today-activity-detail');
@@ -1130,11 +815,12 @@ function renderTodaysActivityDetail() {
     logsToday.sort((a,b) => a.box_id.localeCompare(b.box_id)).forEach(log => {
         const timePart = log.log_timestamp.split(' ')[1] || '';
         const intersections = intersectionCache[log.box_id] || [];
-        const cablesText = intersections.length > 0 ? `(Interseca: ${intersections.join(', ')})` : '';
+        const cablesText = intersections.length > 0 ? ` <span style="color: #007BFF;">(Interseca: ${intersections.join(', ')})</span>` : '';
+
         html += `<div class="history-item" style="padding: 5px 0;">` +
-            `<span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> ` +
-            `Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.${cablesText}` +
-            `</div>`;
+                `<span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> ` +
+                `Nave <b>${log.ship}</b> ha loggato il box <b>${log.box_id}</b> alle ${timePart}.${cablesText}` +
+                `</div>`;
     });
     container.innerHTML = html;
 }
@@ -1163,7 +849,278 @@ function createOrUpdateCharts() {
     });
 }
 
-// --- 9. CARICAMENTO INIZIALE E WEBSOCKETS ---
+// --- NUOVE FUNZIONI PER IL REPORT CAVI ---
+function generateCableReportData() {
+    const invertedIntersections = {};
+
+    for (const boxId in intersectionCache) {
+        const cables = intersectionCache[boxId];
+        for (const cableName of cables) {
+            if (!invertedIntersections[cableName]) {
+                invertedIntersections[cableName] = [];
+            }
+            invertedIntersections[cableName].push(boxId);
+        }
+    }
+
+    const reportData = {};
+    for (const cableName in invertedIntersections) {
+        reportData[cableName] = [];
+        const intersectingBoxes = invertedIntersections[cableName];
+
+        for (const boxId of intersectingBoxes) {
+            const logsForBox = tuttiDatiLog[boxId] || [];
+            let lastLogTimestamp = 'Nessun Log';
+            let lastShip = '-';
+
+            if (logsForBox.length > 0) {
+                const latestLog = logsForBox.reduce((latest, current) => {
+                    return new Date(current.log_timestamp) > new Date(latest.log_timestamp) ? current : latest;
+                });
+                lastLogTimestamp = latestLog.log_timestamp;
+                lastShip = latestLog.ship;
+            }
+            reportData[cableName].push({ boxId: boxId, lastLog: lastLogTimestamp, lastShip: lastShip });
+        }
+    }
+    cableReportCache = reportData;
+    console.log("Report per cavo generato.", cableReportCache);
+}
+
+function renderCableReport() {
+    const container = document.getElementById('cable-report-container');
+    if (!container) return;
+
+    const sortedCableNames = Object.keys(cableReportCache).sort();
+
+    if (sortedCableNames.length === 0) {
+        container.innerHTML = '<p style="padding: 20px; text-align: center;">Nessuna intersezione trovata.</p>';
+        return;
+    }
+
+    let tableHTML = '<table id="cable-report-table" class="history-table" style="width: 100%;">';
+    tableHTML += `
+        <thead>
+            <tr>
+                <th>Nome Cavo</th>
+                <th>Box Intersecato</th>
+                <th>Data Ultima Ispezione</th>
+                <th>Assetto</th>
+            </tr>
+        </thead>
+        <tbody>
+    `;
+
+    for (const cableName of sortedCableNames) {
+        const boxData = cableReportCache[cableName];
+        if (boxData.length > 0) {
+            boxData.sort((a, b) => a.boxId.localeCompare(b.boxId));
+
+            tableHTML += `
+                <tr>
+                    <td rowspan="${boxData.length}" style="vertical-align: top; border-bottom: 2px solid #000;"><b>${cableName}</b></td>
+                    <td>${boxData[0].boxId}</td>
+                    <td>${boxData[0].lastLog}</td>
+                    <td>${boxData[0].lastShip}</td>
+                </tr>
+            `;
+            for (let i = 1; i < boxData.length; i++) {
+                tableHTML += `
+                    <tr>
+                        <td>${boxData[i].boxId}</td>
+                        <td>${boxData[i].lastLog}</td>
+                        <td>${boxData[i].lastShip}</td>
+                    </tr>
+                `;
+            }
+            if (boxData.length > 1) {
+                const lastRowIndex = tableHTML.lastIndexOf('<tr>');
+                tableHTML = tableHTML.substring(0, lastRowIndex) + '<tr style="border-bottom: 2px solid #000;">' + tableHTML.substring(lastRowIndex + 4);
+            }
+        }
+    }
+
+    tableHTML += '</tbody></table>';
+    container.innerHTML = tableHTML;
+}
+
+function openCableReport() {
+    renderCableReport();
+    openModal('modal-cable-report');
+}
+
+function exportCableReportToPDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'pt',
+        format: 'a4'
+    });
+
+    const title = "Report Stato Sorveglianza Cavi";
+    const timestamp = `Generato il: ${new Date().toLocaleString('it-IT')}`;
+
+    doc.setFontSize(18);
+    doc.text(title, 40, 40);
+    doc.setFontSize(10);
+    doc.text(timestamp, 40, 55);
+
+    try {
+        doc.autoTable({
+            html: '#cable-report-table',
+            startY: 70,
+            theme: 'grid',
+            headStyles: {
+                fillColor: [41, 128, 185],
+                textColor: 255
+            },
+            didDrawCell: (data) => {
+                if (data.column.index === 0 && data.cell.raw.rowSpan > 1) {
+                    doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height * data.cell.raw.rowSpan, 'S');
+                    doc.autoTableText(data.cell.text, data.cell.x + data.cell.padding('left'), data.cell.y + data.cell.height / 2, {
+                        halign: 'left',
+                        valign: 'middle'
+                    });
+                }
+            }
+        });
+    } catch (e) {
+        console.error("Errore durante la generazione della tabella PDF:", e);
+        showToast("Impossibile generare il PDF.", "error");
+        return;
+    }
+
+    doc.save('report_cavi.pdf');
+}
+
+
+// --- 10. GESTIONE LOG COMPLETA (MODAL) ---
+function openLogManager() {
+    renderLogTable();
+    populateImportSelect();
+    openModal('modal-log-manager');
+}
+function renderLogTable(logs) {
+    const tableBody = document.getElementById('log-table-body');
+    if (!tableBody) return;
+
+    const logList = logs || Object.values(tuttiDatiLog).flat().sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+
+    tableBody.innerHTML = logList.map(log => {
+        const intersections = intersectionCache[log.box_id] || [];
+        const cablesText = intersections.join(', ') || '-';
+        return `
+            <tr data-log-id="${log.id}">
+                <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
+                <td>${log.log_timestamp}</td>
+                <td>${log.box_id}</td>
+                <td>${log.ship}</td>
+                <td><span style="color:${COLOR_MAP[log.color_code] || '#808080'}; font-size: 1.2em; font-weight:bold;">●</span></td>
+                <td>${log.import_id || 'manual'}</td>
+                <td>${cablesText}</td>
+            </tr>
+        `}).join('') || '<tr><td colspan="7" style="text-align:center; padding: 15px;">Nessun log trovato.</td></tr>';
+}
+async function populateImportSelect() {
+    try {
+        const response = await fetch('/api/imports');
+        if (!response.ok) throw new Error('Errore di rete nel fetch degli imports');
+        const imports = await response.json();
+        const select = document.getElementById('import-select');
+        if (!select) return;
+
+        select.innerHTML = '<option value="">Seleziona un batch...</option>';
+        imports.forEach(importId => {
+            select.innerHTML += `<option value="${importId}">${importId}</option>`;
+        });
+    } catch (error) {
+        console.error("Errore nel caricamento dei batch di importazione:", error);
+        showToast("Errore caricamento batch di importazione", 'error');
+    }
+}
+function applyLogTableFilters() {
+    const dateFilter = document.getElementById('log-table-filter-date').value;
+    const shipFilter = document.getElementById('log-table-filter-ship').value.toLowerCase();
+    const colorFilter = document.getElementById('log-table-filter-color').value;
+
+    const allLogs = Object.values(tuttiDatiLog).flat();
+
+    const filteredLogs = allLogs.filter(log => {
+        const shipMatch = !shipFilter || log.ship.toLowerCase().includes(shipFilter);
+        const dateMatch = !dateFilter || log.log_timestamp.startsWith(dateFilter);
+        const colorMatch = !colorFilter || log.color_code === colorFilter;
+        return shipMatch && dateMatch && colorMatch;
+    });
+
+    renderLogTable(filteredLogs);
+}
+function resetLogTableFilters() {
+    document.getElementById('log-table-filter-date').value = '';
+    document.getElementById('log-table-filter-ship').value = '';
+    document.getElementById('log-table-filter-color').value = '';
+    document.querySelector('#log-table-body input[type="checkbox"]').checked = false;
+    renderLogTable();
+}
+function toggleSelectAll(masterCheckbox) {
+    const checkboxes = document.querySelectorAll('#log-table-body .log-select-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = masterCheckbox.checked;
+    });
+}
+async function deleteSelectedImport() {
+    const importId = document.getElementById('import-select').value;
+    if (!importId) {
+        showToast('Seleziona un batch di importazione da eliminare.', 'error');
+        return;
+    }
+    if (confirm(`Sei sicuro di voler eliminare tutti i log dall'import "${importId}"? L'azione è irreversibile.`)) {
+        await fetch('/api/logs/batch_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ import_id: importId })
+        });
+    }
+}
+async function deleteSelectedLogs() {
+    const selectedIds = Array.from(document.querySelectorAll('#log-table-body .log-select-checkbox:checked')).map(cb => cb.value);
+    if (selectedIds.length === 0) {
+        showToast('Nessun log selezionato.', 'error');
+        return;
+    }
+    if (confirm(`Sei sicuro di voler eliminare i ${selectedIds.length} log selezionati? L'azione è irreversibile.`)) {
+         await fetch('/api/logs/batch_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ log_ids: selectedIds })
+        });
+    }
+}
+function exportVisibleLogs() {
+    const headers = ["Timestamp", "Box", "Nave", "Colore", "Import ID"];
+    const rows = Array.from(document.querySelectorAll('#log-table-body tr'));
+
+    if (rows.length === 0 || rows[0].cells.length < 2) {
+        showToast('Nessun dato da esportare.', 'info');
+        return;
+    }
+
+    let csvContent = headers.join(";") + "\n";
+    rows.forEach(row => {
+        const rowData = Array.from(row.cells).slice(1).map(cell => `"${cell.innerText.replace(/"/g, '""')}"`);
+        csvContent += rowData.join(";") + "\n";
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "log_visibili_export.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+
+// --- 11. CARICAMENTO INIZIALE E WEBSOCKETS ---
 async function caricaLogIniziali() {
     try {
         const response = await fetch('/api/logs');
@@ -1173,11 +1130,10 @@ async function caricaLogIniziali() {
     } catch(e) { console.error("Impossibile caricare dati log:", e); }
 }
 function connectWebSocket() {
-    // Scegli il protocollo corretto (wss per https, ws per http)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws_url = `${protocol}//${window.location.host}/ws`;
 
-    console.log(`Tentativo di connessione a WebSocket: ${ws_url}`); // Utile per il debug
+    console.log(`Tentativo di connessione a WebSocket: ${ws_url}`);
 
     const ws = new WebSocket(ws_url);
 
@@ -1201,7 +1157,6 @@ function connectWebSocket() {
             tuttiDatiLog[message.boxId] = message.data;
         }
       
-        // Re-renderizza stili e aggiorna i dashboard se sono aperti
         renderizzaStili();
         if (document.getElementById('modal-dashboard').classList.contains('visible')) {
              updateDashboardStats();
@@ -1225,54 +1180,46 @@ function connectWebSocket() {
     };
 }
 async function inizializzaApplicazione() {
-    // Imposta la data di default nel form dei log
     document.getElementById('dateInput').valueAsDate = new Date();
 
     try {
-        // 1. Carica la configurazione principale dell'applicazione
         const response = await fetch('/api/config');
         if (!response.ok) throw new Error('File di configurazione non trovato sul server.');
         config = await response.json();
         
-        // 2. Inizializza la mappa Leaflet
         map = L.map('map').setView([43.5, 16], 7);
         const baseMapLayer = L.tileLayer(config.base_map.url_template, { attribution: config.base_map.attribution });
         baseMapLayer.addTo(map);
 
-        // 3. Inizializza i gruppi di layer per la griglia e le etichette
         gridLayerGroup = L.featureGroup().addTo(map);
-        gridLabelsLayerGroup = L.featureGroup(); // Non aggiungerlo alla mappa di default
+        gridLabelsLayerGroup = L.featureGroup();
 
         const baseLayers = { "Mappa Base": baseMapLayer };
         const overlayLayers = { 
             "Griglia Interattiva": gridLayerGroup,
-            "ID Box": gridLabelsLayerGroup // Questa riga è corretta e va mantenuta
+            "ID Box": gridLabelsLayerGroup 
         };
-        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);   
-        // Crea un "pane" personalizzato per assicurare che i layer vettoriali stiano sopra la griglia
+        layerControl = L.control.layers(baseLayers, overlayLayers, { collapsed: true }).addTo(map);
+        
         map.createPane('shapefilePane');
         map.getPane('shapefilePane').style.zIndex = 390;
 
-        // 4. Imposta i valori iniziali per il form della griglia
         const gridBounds = config.grid_bounds;
         document.getElementById('lat_start').value = gridBounds.lat_start;
         document.getElementById('lon_start').value = gridBounds.lon_start;
         document.getElementById('lat_end').value = gridBounds.lat_end;
         document.getElementById('lon_end').value = gridBounds.lon_end;
         
-        // 5. Disegna la griglia e carica i log iniziali
         await disegnaGriglia(gridBounds);
         
-        // 6. Avvia il caricamento dei layer esterni (WMS, WFS, etc.)
         const layerPromises = loadExternalLayers();
 
-        // 7. Aspetta che TUTTI i layer asincroni (WFS, SHP, GeoJSON) finiscano di caricarsi
         await Promise.allSettled(layerPromises);
 
-        // 8. SOLO ORA, avvia il pre-calcolo delle intersezioni tra box e cavi
         await precomputeAllIntersections();
 
-        // 9. Imposta gli eventi finali dell'interfaccia
+        generateCableReportData();
+
         map.on('mousemove', function(e) {
             const coordsBox = document.getElementById('coords-box');
             const dmsBox = document.getElementById('dms-box');
@@ -1283,7 +1230,6 @@ async function inizializzaApplicazione() {
             dmsBox.innerHTML = `GMS: ${decimalToDms(lat, true)}, ${decimalToDms(lng, false)}`;
         });
 
-        // 10. Connetti al WebSocket per aggiornamenti in tempo reale
         connectWebSocket();
 
     } catch(e) {
@@ -1291,4 +1237,5 @@ async function inizializzaApplicazione() {
         document.body.innerHTML = `<h1>Errore critico durante l'avvio. Controlla la console (F12).</h1><p>${e.message}</p>`;
     }
 }
+
 window.onload = inizializzaApplicazione;
