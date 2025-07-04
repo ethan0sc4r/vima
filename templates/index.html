@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mappa Web App</title>
 
-    <!-- Caricamento delle librerie -->
+    <!-- Caricamento delle librerie CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/leaflet.css') }}"/>
+    
+    <!-- Caricamento delle librerie JS -->
     <script src="{{ url_for('static', filename='js/leaflet.js') }}"></script>
     <script src="{{ url_for('static', filename='js/shp.js') }}"></script>
     <script src="{{ url_for('static', filename='js/catiline.js') }}"></script>
     <script src="{{ url_for('static', filename='js/leaflet.shpfile.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src='https://cdn.jsdelivr.net/npm/@turf/turf@latest/turf.min.js'></script>
-    <!-- LIBRERIE PER ESPORTAZIONE PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     
@@ -218,7 +219,6 @@
                     <div class="control-group"><label for="timeInput">Orario (HH:MM)</label><input type="time" id="timeInput"></div>
                     <div class="control-group"><label for="shipInput">Nave</label><input type="text" id="shipInput" placeholder="Nome Nave"></div>
                 </div>
-                <!-- Il campo Utente è stato rimosso -->
                 <div class="control-group" style="margin-top: 15px;">
                     <label>Colore Riempimento</label>
                     <div class="color-selector">

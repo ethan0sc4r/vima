@@ -193,7 +193,7 @@ function displayIntersectionResults(boxId) {
     const intersectingCables = intersectionCache[boxId] || [];
 
     if (intersectingCables.length > 0) {
-        resultsContainer.innerHTML = '<ul>' + intersectingCables.map(name => `<li>${name}</li>`).join('') + '</ul>';
+        resultsContainer.innerHTML = '<ul>' + intersectingCables.map(cable => `<li>${cable.name} (${cable.NOBJNM || 'N/D'})</li>`).join('') + '</ul>';
     } else {
         resultsContainer.innerHTML = '<p>Nessuna intersezione trovata.</p>';
     }
@@ -262,7 +262,6 @@ function openEditLogModal(log) {
     document.getElementById('timeInput').value = timePart || '00:00';
  
     document.getElementById('shipInput').value = log.ship;
-    document.getElementById('userInput').value = log.user || '';
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
     openModal('modal-log-entry');
 }
@@ -285,11 +284,10 @@ async function saveLog() {
         boxId: document.getElementById('boxInput').value.toUpperCase(),
         timestamp: `${date} ${time}`,
         ship: document.getElementById('shipInput').value,
-        user: document.getElementById('userInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
-    if (!boxData.boxId || !date || !time || !boxData.ship || !boxData.user) { 
-        showToast("Tutti i campi sono obbligatori, incluso l'utente.", 'error'); 
+    if (!boxData.boxId || !date || !time || !boxData.ship) { 
+        showToast("Tutti i campi sono obbligatori.", 'error'); 
         return; 
     }
     if (!gridLayers[boxData.boxId]) { showToast(`L'ID Box "${boxData.boxId}" non esiste sulla mappa.`, 'error'); return; }
@@ -392,10 +390,10 @@ function triggerCSVDownload(csvContent, fileName) {
 function esportaLogCSV() {
     const boxIds = Object.keys(tuttiDatiLog);
     if (boxIds.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
-    let csvContent = "Timestamp;Box;Nave;Colore;User\n";
+    let csvContent = "Timestamp;Box;Nave;Colore\n";
     boxIds.forEach(boxId => {
         tuttiDatiLog[boxId].forEach(data => {
-            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code};${data.user}\n`;
+            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code}\n`;
         });
     });
     triggerCSVDownload(csvContent, "mappa_log_export.csv");
@@ -437,11 +435,16 @@ function renderLayerManagerList() {
             const layerId = `${layer.type}-${index}`;
             const item = document.createElement('div');
             item.className = 'layer-item';
+            
+            const actionsHTML = layer.protected ? 
+                '<span style="font-size: 14px; color: #999;">(Protetto)</span>' : 
+                `<div class="layer-actions"><span title="Modifica Layer" onclick="openEditLayerModal(${index})">✎</span><span title="Cancella Layer" onclick="deleteLayer(${index})">🗑️</span></div>`;
+
             item.innerHTML = `
                 <span class="visibility-toggle" onclick="toggleLayerVisibility('${layerId}')">${loadedExternalLayers[layerId] && map.hasLayer(loadedExternalLayers[layerId]) ? '👁️' : '⚪'}</span>
                 <div class="reorder-arrows"><span onclick="reorderLayer(${index}, -1)">▲</span><span onclick="reorderLayer(${index}, 1)">▼</span></div>
                 <span class="layer-name">${layer.name} (${layer.type.toUpperCase()})</span>
-                <div class="layer-actions"><span title="Modifica Layer" onclick="openEditLayerModal(${index})">✎</span><span title="Cancella Layer" onclick="deleteLayer(${index})">🗑️</span></div>`;
+                ${actionsHTML}`;
             container.appendChild(item);
         });
     } else {
@@ -456,8 +459,16 @@ function toggleLayerVisibility(layerId) {
 }
 async function reorderLayer(index, direction) {
     const layers = config.external_layers;
+    if (layers[index].protected) {
+        showToast("Questo layer è protetto e non può essere riordinato.", "error");
+        return;
+    }
     const newIndex = index + direction;
     if (newIndex < 0 || newIndex >= layers.length) return;
+    if (layers[newIndex].protected) {
+        showToast("Non è possibile spostare un layer sopra un layer protetto.", "error");
+        return;
+    }
     [layers[index], layers[newIndex]] = [layers[newIndex], layers[index]];
     await saveConfigAndReload();
 }
@@ -470,6 +481,10 @@ function openAddLayerModal() {
 }
 function openEditLayerModal(index) {
     const layer = config.external_layers[index];
+    if (layer.protected) {
+        showToast("Questo layer è protetto e non può essere modificato.", "error");
+        return;
+    }
     document.getElementById('layer-form-title').textContent = `Modifica Layer: ${layer.name}`;
     document.getElementById('layer-type').value = layer.type;
     document.getElementById('layer-index-input').value = index;
@@ -565,7 +580,12 @@ async function saveLayer() {
     await saveConfigAndReload();
 }
 async function deleteLayer(index) {
-    if (confirm(`Sei sicuro di voler cancellare il layer "${config.external_layers[index].name}"?`)) {
+    const layer = config.external_layers[index];
+    if (layer.protected) {
+        showToast("Questo layer è protetto e non può essere cancellato.", "error");
+        return;
+    }
+    if (confirm(`Sei sicuro di voler cancellare il layer "${layer.name}"?`)) {
         config.external_layers.splice(index, 1);
         await saveConfigAndReload();
     }
@@ -729,8 +749,11 @@ async function precomputeAllIntersections() {
         for (const cableFeature of allCableFeatures) {
             if (turf.booleanIntersects(boxPolygon, cableFeature)) {
                 const props = cableFeature.properties;
-                const displayName = props.Name || props.ID || props.nome || props.NOME_UFFICIALE || 'Feature senza nome';
-                intersectingCables.push(displayName);
+                const cableInfo = {
+                    name: props.Name || props.nome || 'Cavo senza nome',
+                    NOBJNM: props.NOBJNM || 'N/D'
+                };
+                intersectingCables.push(cableInfo);
             }
         }
         
@@ -777,7 +800,7 @@ function renderExpiredLogsList() {
     let html = '';
     expiredBoxes.forEach(item => {
         const intersections = intersectionCache[item.boxId] || [];
-        const cablesText = intersections.length > 0 ? `Cavi: ${intersections.join(', ')}` : 'Nessuna intersezione';
+        const cablesText = intersections.length > 0 ? `Cavi: ${intersections.map(c => c.name).join(', ')}` : 'Nessuna intersezione';
         html += `
             <div class="content-item" style="padding: 10px;">
                 <b>Box: ${item.boxId}</b><br>
@@ -815,7 +838,7 @@ function renderTodaysActivityDetail() {
     logsToday.sort((a,b) => a.box_id.localeCompare(b.box_id)).forEach(log => {
         const timePart = log.log_timestamp.split(' ')[1] || '';
         const intersections = intersectionCache[log.box_id] || [];
-        const cablesText = intersections.length > 0 ? ` <span style="color: #007BFF;">(Interseca: ${intersections.join(', ')})</span>` : '';
+        const cablesText = intersections.length > 0 ? ` <span style="color: #007BFF;">(Interseca: ${intersections.map(c => c.name).join(', ')})</span>` : '';
 
         html += `<div class="history-item" style="padding: 5px 0;">` +
                 `<span style="color:${COLOR_MAP[log.color_code]}; font-weight:bold;">●</span> ` +
@@ -849,26 +872,31 @@ function createOrUpdateCharts() {
     });
 }
 
-// --- NUOVE FUNZIONI PER IL REPORT CAVI ---
 function generateCableReportData() {
     const invertedIntersections = {};
 
     for (const boxId in intersectionCache) {
         const cables = intersectionCache[boxId];
-        for (const cableName of cables) {
-            if (!invertedIntersections[cableName]) {
-                invertedIntersections[cableName] = [];
+        for (const cableInfo of cables) {
+            if (!invertedIntersections[cableInfo.name]) {
+                invertedIntersections[cableInfo.name] = {
+                    NOBJNM: cableInfo.NOBJNM,
+                    boxes: []
+                };
             }
-            invertedIntersections[cableName].push(boxId);
+            invertedIntersections[cableInfo.name].boxes.push(boxId);
         }
     }
 
     const reportData = {};
     for (const cableName in invertedIntersections) {
-        reportData[cableName] = [];
-        const intersectingBoxes = invertedIntersections[cableName];
-
-        for (const boxId of intersectingBoxes) {
+        const cableData = invertedIntersections[cableName];
+        reportData[cableName] = {
+            NOBJNM: cableData.NOBJNM,
+            boxes: []
+        };
+        
+        for (const boxId of cableData.boxes) {
             const logsForBox = tuttiDatiLog[boxId] || [];
             let lastLogTimestamp = 'Nessun Log';
             let lastShip = '-';
@@ -880,7 +908,7 @@ function generateCableReportData() {
                 lastLogTimestamp = latestLog.log_timestamp;
                 lastShip = latestLog.ship;
             }
-            reportData[cableName].push({ boxId: boxId, lastLog: lastLogTimestamp, lastShip: lastShip });
+            reportData[cableName].boxes.push({ boxId: boxId, lastLog: lastLogTimestamp, lastShip: lastShip });
         }
     }
     cableReportCache = reportData;
@@ -903,28 +931,32 @@ function renderCableReport() {
         <thead>
             <tr>
                 <th>Nome Cavo</th>
+                <th>Collega</th>
                 <th>Box Intersecato</th>
                 <th>Data Ultima Ispezione</th>
-                <th>Assetto</th>
+                <th>Assetto (Nave)</th>
             </tr>
         </thead>
         <tbody>
     `;
 
     for (const cableName of sortedCableNames) {
-        const boxData = cableReportCache[cableName];
+        const cableData = cableReportCache[cableName];
+        const boxData = cableData.boxes;
         if (boxData.length > 0) {
             boxData.sort((a, b) => a.boxId.localeCompare(b.boxId));
 
+            const totalRows = boxData.length;
             tableHTML += `
                 <tr>
-                    <td rowspan="${boxData.length}" style="vertical-align: top; border-bottom: 2px solid #000;"><b>${cableName}</b></td>
+                    <td rowspan="${totalRows}" style="vertical-align: top; border-bottom: 2px solid #000;"><b>${cableName}</b></td>
+                    <td rowspan="${totalRows}" style="vertical-align: top; border-bottom: 2px solid #000;">${cableData.NOBJNM}</td>
                     <td>${boxData[0].boxId}</td>
                     <td>${boxData[0].lastLog}</td>
                     <td>${boxData[0].lastShip}</td>
                 </tr>
             `;
-            for (let i = 1; i < boxData.length; i++) {
+            for (let i = 1; i < totalRows; i++) {
                 tableHTML += `
                     <tr>
                         <td>${boxData[i].boxId}</td>
@@ -933,7 +965,7 @@ function renderCableReport() {
                     </tr>
                 `;
             }
-            if (boxData.length > 1) {
+            if (totalRows > 1) {
                 const lastRowIndex = tableHTML.lastIndexOf('<tr>');
                 tableHTML = tableHTML.substring(0, lastRowIndex) + '<tr style="border-bottom: 2px solid #000;">' + tableHTML.substring(lastRowIndex + 4);
             }
@@ -975,7 +1007,7 @@ function exportCableReportToPDF() {
                 textColor: 255
             },
             didDrawCell: (data) => {
-                if (data.column.index === 0 && data.cell.raw.rowSpan > 1) {
+                if (data.column.index <= 1 && data.cell.raw.rowSpan > 1) {
                     doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height * data.cell.raw.rowSpan, 'S');
                     doc.autoTableText(data.cell.text, data.cell.x + data.cell.padding('left'), data.cell.y + data.cell.height / 2, {
                         halign: 'left',
@@ -1008,7 +1040,7 @@ function renderLogTable(logs) {
 
     tableBody.innerHTML = logList.map(log => {
         const intersections = intersectionCache[log.box_id] || [];
-        const cablesText = intersections.join(', ') || '-';
+        const cablesText = intersections.map(c => c.name).join(', ') || '-';
         return `
             <tr data-log-id="${log.id}">
                 <td><input type="checkbox" class="log-select-checkbox" value="${log.id}"></td>
@@ -1126,9 +1158,10 @@ async function caricaLogIniziali() {
         const response = await fetch('/api/logs');
         if (!response.ok) throw new Error("Errore nel fetch dei log");
         tuttiDatiLog = await response.json();
-        renderizzaStili();
+        renderizzaStili(); // Aggiorna la mappa con i dati iniziali
     } catch(e) { console.error("Impossibile caricare dati log:", e); }
 }
+
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws_url = `${protocol}//${window.location.host}/ws`;
@@ -1155,9 +1188,11 @@ function connectWebSocket() {
 
         if (message.type === 'box_history_updated') {
             tuttiDatiLog[message.boxId] = message.data;
+            // Aggiorna la mappa e i report in tempo reale
+            renderizzaStili();
+            generateCableReportData();
         }
       
-        renderizzaStili();
         if (document.getElementById('modal-dashboard').classList.contains('visible')) {
              updateDashboardStats();
              renderTodaysActivityDetail();
@@ -1188,6 +1223,7 @@ async function inizializzaApplicazione() {
         config = await response.json();
         
         map = L.map('map').setView([43.5, 16], 7);
+        
         const baseMapLayer = L.tileLayer(config.base_map.url_template, { attribution: config.base_map.attribution });
         baseMapLayer.addTo(map);
 

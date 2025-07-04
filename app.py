@@ -2,7 +2,7 @@ import sqlite3
 import json
 import os
 import requests
-from flask import Flask, render_template, request, jsonify, g, Response
+from flask import Flask, render_template, request, jsonify, g, Response, send_from_directory
 from flask_sock import Sock
 from collections import defaultdict
 from datetime import datetime
@@ -30,108 +30,84 @@ def close_connection(exception):
 
 # --- FUNZIONE PER WEB SOCKETS ---
 def broadcast(message):
-    """Invia un messaggio a tutti i client connessi."""
-    disconnected_clients = []
     for client in list(clients):
         try:
             client.send(json.dumps(message))
         except Exception:
-            disconnected_clients.append(client)
-    for client in disconnected_clients:
-        clients.remove(client)
+            clients.remove(client)
 
 # --- ROUTE E API ---
 @app.route('/')
 def index():
-    """Serve la pagina web principale."""
     return render_template('index.html')
+
+# --- NUOVA ROUTE PER LA CARTELLA STORAGE ---
+@app.route('/storage/<path:path>')
+def send_storage_file(path):
+    return send_from_directory('storage', path)
 
 @sock.route('/ws')
 def websocket(ws):
-    """Gestisce le connessioni WebSocket in entrata."""
-    print(f"Nuovo client connesso al WebSocket. Totale client: {len(clients) + 1}")
     clients.append(ws)
     try:
         while True:
-            # Mantiene la connessione attiva. Il client non invia dati.
             ws.receive(timeout=None)
-    except Exception:
-        print(f"Client WebSocket disconnesso. Totale client: {len(clients) - 1}")
     finally:
         if ws in clients:
             clients.remove(ws)
 
 @app.route('/api/wms_proxy')
 def wms_proxy():
-    """Funziona come un proxy per le richieste WMS, gestendo anche l'autenticazione."""
     wms_params = request.args.to_dict()
     wms_server_url = wms_params.pop('wms_server_url', None)
     auth_type = wms_params.pop('authentication', 'none')
-
     if not wms_server_url:
         return "URL del server WMS mancante nel proxy", 400
-
     try:
         auth = None
-        # --- MODIFICA QUI ---
-        # Imposta un User-Agent che simula QGIS
         headers = {'User-Agent': 'QGIS/3.34.8'}
-
         if auth_type == 'basic':
             wms_user = wms_params.pop('username', None)
             wms_pass = wms_params.pop('password', None)
             if wms_user and wms_pass:
                 auth = (wms_user, wms_pass)
-        
         response = requests.get(wms_server_url, params=wms_params, headers=headers, auth=auth, stream=True, timeout=15, verify=False)
         response.raise_for_status()
-        
         return Response(response.content, content_type=response.headers['content-type'])
-        
     except requests.exceptions.RequestException as e:
         print(f"ERRORE PROXY WMS: {e}", flush=True)
         return f"Errore nella connessione al server WMS esterno: {e}", 502
-    
+
 @app.route('/api/wfs_proxy')
 def wfs_proxy():
-    """Funziona come un proxy per le richieste WFS, con gestione robusta degli errori."""
     params = request.args.to_dict()
     wfs_server_url = params.pop('wfs_server_url', None)
     auth_type = params.pop('authentication', 'none')
-
     if not wfs_server_url:
         return "URL del server WFS mancante nel proxy", 400
-
     try:
         auth = None
-        # --- MODIFICA QUI ---
-        # Imposta un User-Agent che simula QGIS
         headers = {'User-Agent': 'QGIS/3.34.8'}
-
         if auth_type == 'basic':
             wfs_user = params.pop('username', None)
             wfs_pass = params.pop('password', None)
             if wfs_user and wfs_pass:
-                auth = (wfs_user, wms_pass)
-        
+                auth = (wfs_user, wfs_pass)
         response = requests.get(wfs_server_url, params=params, headers=headers, auth=auth, timeout=20, verify=False)
         response.raise_for_status()
-        
         content_type = response.headers.get('content-type', '')
-        if 'application/json' in content_type:
+        if 'application/json' in content_type or 'text/json' in content_type:
             return jsonify(response.json())
         else:
             error_text = response.text
             print(f"RISPOSTA NON JSON DAL SERVER WFS:\n{error_text}")
             return jsonify({"error": "Il server WFS ha restituito una risposta non valida (non JSON).", "details": error_text}), 502
-
     except Exception as e:
         print(f"ERRORE PROXY WFS (generico): {e}", flush=True)
         return jsonify({"error": f"Errore generico nel proxy: {str(e)}"}), 502
-    
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def manage_config():
-    """Legge e scrive il file di configurazione globale."""
     if request.method == 'POST':
         try:
             new_config = request.json
@@ -149,7 +125,6 @@ def manage_config():
 
 @app.route('/api/logs', methods=['GET', 'POST'])
 def manage_logs():
-    """Gestisce l'aggiunta e la lettura dei log dal database."""
     db = get_db()
     if request.method == 'POST':
         log_data = request.json
@@ -171,7 +146,6 @@ def manage_logs():
 
 @app.route('/api/logs/import', methods=['POST'])
 def import_logs_batch():
-    """Importa un intero batch di log da un CSV."""
     csv_text = request.data.decode('utf-8')
     import_id = f"import-{int(datetime.now().timestamp())}"
     logs_to_insert = []
@@ -198,7 +172,6 @@ def import_logs_batch():
 
 @app.route('/api/logs/batch_delete', methods=['POST'])
 def delete_logs_batch():
-    """Cancella un gruppo di log (per ID o per import_id)."""
     data = request.json
     db = get_db()
     
@@ -214,7 +187,6 @@ def delete_logs_batch():
 
 @app.route('/api/imports', methods=['GET'])
 def get_imports():
-    """Restituisce una lista di tutti i batch di importazione unici."""
     db = get_db()
     cursor = db.execute("SELECT DISTINCT import_id FROM logs WHERE import_id IS NOT NULL AND import_id != 'manual'")
     imports = [row['import_id'] for row in cursor.fetchall()]
@@ -222,7 +194,6 @@ def get_imports():
 
 @app.route('/api/logs/<int:log_id>', methods=['PUT', 'DELETE'])
 def manage_single_log(log_id):
-    """Aggiorna o cancella un singolo record di log."""
     db = get_db()
     log_to_manage = db.execute('SELECT box_id FROM logs WHERE id = ?', (log_id,)).fetchone()
     if not log_to_manage: return jsonify({'status': 'error', 'message': 'Log non trovato'}), 404
@@ -243,7 +214,6 @@ def manage_single_log(log_id):
 
 @app.route('/api/logs/reset', methods=['POST'])
 def reset_logs():
-    """Svuota completamente la tabella dei log."""
     db = get_db()
     db.execute('DELETE FROM logs')
     db.commit()
@@ -252,15 +222,13 @@ def reset_logs():
 
 # BLOCCO DI AVVIO SERVER
 if __name__ == '__main__':
-    # Crea la cartella 'storage' se non esiste (per lo sviluppo locale)
     if not os.path.exists('storage'):
         os.makedirs('storage')
         
-    # Crea un file di configurazione di default se non esiste al primo avvio
     if not os.path.exists(CONFIG_FILE):
         print(f"File '{CONFIG_FILE}' non trovato. Creazione di una configurazione di default.")
         default_config = {
-            "grid_bounds": {"lat_start": 46, "lon_start": 5.7, "lat_end": 32, "lon_end": 24},
+            "grid_bounds": {"lat_start": 46.5, "lon_start": 12.0, "lat_end": 40.0, "lon_end": 20.0},
             "base_map": {"url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": "&copy; OpenStreetMap contributors"},
             "external_layers": []
         }
