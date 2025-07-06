@@ -1,0 +1,10 @@
+{
+    "ship_name": "CAV",
+    "default_color": "1",
+    "grid_bounds": {
+        "lat_start": 46.0,
+        "lon_start": 5.7,
+        "lat_end": 32.0,
+        "lon_end": 24.0
+    }
+}

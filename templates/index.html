@@ -79,14 +79,61 @@
         .history-table th { background-color: #f2f2f2; }
         .history-table .actions-cell { text-align: center; }
         .history-table .actions-cell span { cursor: pointer; font-size: 18px; margin: 0 5px; }
-        #modal-log-manager { top: 0; left: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; border-radius: 0; }
+        /* Modifiche per la modale di gestione log */
+        #modal-log-manager { 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            max-width: 100%; 
+            max-height: 100%; 
+            border-radius: 0; 
+        }
+        #modal-log-manager .modal-content {
+            width: 95%; /* Aumenta la larghezza */
+            max-width: 1200px; /* Larghezza massima più grande */
+            height: 90%; /* Aumenta l'altezza */
+            max-height: 90vh; /* Altezza massima */
+            display: flex;
+            flex-direction: column;
+            padding: 20px; /* Riduci un po' il padding per più spazio */
+        }
         .log-manager-container { display: flex; flex-direction: column; height: 100%; }
         .log-manager-header { padding: 10px; background-color: #f5f5f5; border-bottom: 1px solid #ccc; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
-        .log-manager-table-container { flex-grow: 1; overflow-y: auto; }
+        .log-manager-table-container { flex-grow: 1; overflow-y: auto; margin-top: 15px; } /* Aggiungi overflow-y e margin-top */
         .log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .log-table th, .log-table td { padding: 8px; border: 1px solid #ddd; text-align: left; }
         .log-table thead { position: sticky; top: 0; background-color: #e9ecef; z-index: 1; }
         .grid-label { background: transparent; border: none; box-shadow: none; color: rgba(0, 0, 0, 0.7); font-size: 9px; font-weight: bold; text-align: center; pointer-events: none; display: flex; justify-content: center; align-items: center; white-space: nowrap; }
+        /* Stili per la paginazione */
+        .log-pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px 0;
+            gap: 10px;
+            border-top: 1px solid #eee;
+            margin-top: 10px;
+        }
+        .log-pagination button {
+            background-color: #008CBA;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        .log-pagination button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .log-pagination button:hover:not(:disabled) {
+            background-color: #005f7f;
+        }
+        .log-pagination .page-info {
+            font-weight: bold;
+            color: #555;
+        }
     </style>
 </head>
 <body>
@@ -152,6 +199,9 @@
                         </thead>
                         <tbody id="log-table-body"></tbody>
                     </table>
+                </div>
+                <div id="log-pagination" class="log-pagination">
+                    <!-- I bottoni di paginazione verranno inseriti qui da JavaScript -->
                 </div>
             </div>
         </div>

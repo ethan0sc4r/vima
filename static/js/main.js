@@ -10,6 +10,8 @@ let colorChartInstance = null, shipChartInstance = null;
 let loadedExternalLayers = {};
 let intersectionCache = {};
 let cableReportCache = {};
+let currentPage = 1; // Pagina corrente per la tabella log
+const logsPerPage = 50; // Log per pagina per la tabella log
 
 // Costanti globali
 const boxSize = 10 / 60;
@@ -204,6 +206,7 @@ function renderHistory(boxId) {
     const years = parseInt(document.getElementById('history-years').value, 10);
     if (isNaN(years) || years < 1) { showToast("Inserisci un numero di anni valido.", 'error'); return; }
     
+    // Assicurati che log_timestamp sia un formato parsabile da Date
     const logsForBox = [...(tuttiDatiLog[boxId] || [])].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
     if (logsForBox.length === 0) {
         historyContent.innerHTML = "<p style='padding: 15px;'>Nessun log trovato per questo box.</p>";
@@ -252,6 +255,7 @@ function renderHistory(boxId) {
 
 function openEditLogModal(log) {
     closeHistoryPanel();
+    // Split del timestamp per popolare correttamente data e ora
     const [datePart, timePart] = log.log_timestamp.split(' ');
     document.getElementById('log-modal-title').textContent = 'Modifica Log';
     document.getElementById('log-save-button').textContent = 'Salva Modifiche';
@@ -259,7 +263,7 @@ function openEditLogModal(log) {
     document.getElementById('boxInput').value = log.box_id;
     document.getElementById('boxInput').readOnly = true;
     document.getElementById('dateInput').value = datePart;
-    document.getElementById('timeInput').value = timePart || '00:00';
+    document.getElementById('timeInput').value = timePart || '00:00'; // Assicurati che ci sia un valore di default
  
     document.getElementById('shipInput').value = log.ship;
     document.querySelector(`input[name="logColor"][value="${log.color_code}"]`).checked = true;
@@ -270,9 +274,7 @@ async function deleteLog(logId, boxId) {
     if (confirm(`Sei sicuro di voler cancellare il log #${logId} dal box ${boxId}?`)) {
         await fetch(`/api/logs/${logId}`, { method: 'DELETE' });
         showToast(`Log #${logId} cancellato.`, 'info');
-        if (document.getElementById('history-title').innerText.includes(boxId)) {
-            closeHistoryPanel();
-        }
+        // Non è più necessario chiamare closeHistoryPanel qui, il WS si occuperà dell'aggiornamento
     }
 }
 
@@ -282,7 +284,7 @@ async function saveLog() {
     const time = document.getElementById('timeInput').value;
     const boxData = {
         boxId: document.getElementById('boxInput').value.toUpperCase(),
-        timestamp: `${date} ${time}`,
+        timestamp: `${date} ${time}`, // Combina data e ora
         ship: document.getElementById('shipInput').value,
         colorCode: document.querySelector('input[name="logColor"]:checked').value
     };
@@ -313,15 +315,20 @@ function renderizzaStili(filtro = null) {
             layer.setStyle(styleDefault).setTooltipContent(defaultTooltip);
             continue;
         }
+        // Ordina i log per timestamp decrescente
         const logsOrdinati = [...logsPerBox].sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
         const logsFiltrati = logsOrdinati.filter(data => {
             if (!filtro) return true;
             let mostra = true;
+            // Assicurati che il confronto della data includa anche l'orario se necessario,
+            // ma per il filtro data semplice, solo la parte YYYY-MM-DD va bene.
             if (filtro.data && !data.log_timestamp.startsWith(filtro.data)) mostra = false;
             if (filtro.nave && !data.ship.toLowerCase().includes(filtro.nave.toLowerCase())) mostra = false;
             if (filtro.colore && data.color_code !== filtro.colore) mostra = false;
             if (filtro.stato && mostra) {
-                const oggi = new Date(); const dataBox = new Date(data.log_timestamp);
+                const oggi = new Date(); 
+                // Considera solo la data per il calcolo della differenza giorni per coerenza con il filtro stato
+                const dataBox = new Date(data.log_timestamp.split(' ')[0]); 
                 const diffGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
                 if (filtro.stato === 'ok' && diffGiorni > GIORNI_BORDO_GIALLO) mostra = false;
                 if (filtro.stato === 'warning' && (diffGiorni <= GIORNI_BORDO_GIALLO || diffGiorni > GIORNI_BORDO_ROSSO)) mostra = false;
@@ -334,7 +341,8 @@ function renderizzaStili(filtro = null) {
             continue;
         }
         const logPiuRecente = logsFiltrati[0];
-        const oggi = new Date(); const dataBox = new Date(logPiuRecente.log_timestamp);
+        const oggi = new Date(); 
+        const dataBox = new Date(logPiuRecente.log_timestamp.split(' ')[0]); // Prendi solo la data per il calcolo della differenza giorni
         const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
         let borderColor;
         if (differenzaGiorni > GIORNI_BORDO_ROSSO) borderColor = BORDO_ROSSO;
@@ -351,7 +359,7 @@ async function resetDatiLog() {
     if (confirm("Sei sicuro di voler cancellare TUTTI i log dal database?")) {
         await fetch('/api/logs/reset', { method: 'POST' });
         showToast("Tutti i log sono stati cancellati.", 'info');
-        closeAllModals();
+        closeAllModals(); // Non è più necessario ricaricare la pagina
     }
 }
 
@@ -388,13 +396,15 @@ function triggerCSVDownload(csvContent, fileName) {
     document.body.removeChild(link);
 }
 function esportaLogCSV() {
-    const boxIds = Object.keys(tuttiDatiLog);
-    if (boxIds.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
+    const allLogs = Object.values(tuttiDatiLog).flat();
+    if (allLogs.length === 0) { showToast("Nessun dato log da esportare.", 'error'); return; }
     let csvContent = "Timestamp;Box;Nave;Colore\n";
-    boxIds.forEach(boxId => {
-        tuttiDatiLog[boxId].forEach(data => {
-            csvContent += `${data.log_timestamp};${boxId};${data.ship};${data.color_code}\n`;
-        });
+    allLogs.forEach(data => {
+        // Assicurati che i dati siano puliti per l'esportazione CSV
+        const timestamp = data.log_timestamp.replace(/"/g, '""'); // Escapa le virgolette
+        const boxId = data.box_id.replace(/"/g, '""');
+        const ship = data.ship.replace(/"/g, '""');
+        csvContent += `${timestamp};${boxId};${ship};${data.color_code}\n`;
     });
     triggerCSVDownload(csvContent, "mappa_log_export.csv");
 }
@@ -412,6 +422,8 @@ function processCSV(event) {
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.message || 'Errore del server');
+            showToast(`Importati ${result.imported_count} log dal CSV.`, 'success');
+            // Non ricarichiamo la pagina, l'aggiornamento avverrà via WebSocket
         } catch (error) {
             console.error("Errore durante l'importazione del CSV:", error);
             showToast(`Errore importazione CSV: ${error.message}`, 'error');
@@ -723,9 +735,12 @@ async function precomputeAllIntersections() {
     const allCableFeatures = [];
     for (const layerId in loadedExternalLayers) {
         const externalLayer = loadedExternalLayers[layerId];
-        if (externalLayer.toGeoJSON) {
+        // Assicurati che il layer sia un GeoJSON o abbia un metodo toGeoJSON valido e non sia nullo
+        if (externalLayer && externalLayer.toGeoJSON) {
             const layerData = externalLayer.toGeoJSON();
-            allCableFeatures.push(...layerData.features);
+            if (layerData && layerData.features) {
+                allCableFeatures.push(...layerData.features);
+            }
         }
     }
 
@@ -747,7 +762,8 @@ async function precomputeAllIntersections() {
 
         const intersectingCables = [];
         for (const cableFeature of allCableFeatures) {
-            if (turf.booleanIntersects(boxPolygon, cableFeature)) {
+            // Controlla che cableFeature.geometry esista prima di passare a turf.booleanIntersects
+            if (cableFeature.geometry && turf.booleanIntersects(boxPolygon, cableFeature)) {
                 const props = cableFeature.properties;
                 const cableInfo = {
                     name: props.Name || props.nome || 'Cavo senza nome',
@@ -774,10 +790,12 @@ function renderExpiredLogsList() {
     for (const boxId in tuttiDatiLog) {
         const logsPerBox = tuttiDatiLog[boxId];
         if (logsPerBox && logsPerBox.length > 0) {
+            // Prendi il log più recente per determinare la scadenza
             const logPiuRecente = logsPerBox.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp))[0];
             
-            const dataBox = new Date(logPiuRecente.log_timestamp);
-            dataBox.setHours(0, 0, 0, 0);
+            // Estrai solo la parte della data per il confronto
+            const dataBox = new Date(logPiuRecente.log_timestamp.split(' ')[0]);
+            dataBox.setHours(0, 0, 0, 0); // Azzera l'orario per confrontare solo le date
 
             const differenzaGiorni = (oggi - dataBox) / (1000 * 3600 * 24);
 
@@ -902,6 +920,7 @@ function generateCableReportData() {
             let lastShip = '-';
 
             if (logsForBox.length > 0) {
+                // Ordina per prendere l'ultimo log basato sul timestamp completo
                 const latestLog = logsForBox.reduce((latest, current) => {
                     return new Date(current.log_timestamp) > new Date(latest.log_timestamp) ? current : latest;
                 });
@@ -919,6 +938,8 @@ function renderCableReport() {
     const container = document.getElementById('cable-report-container');
     if (!container) return;
 
+    // Assicurati che i dati del report siano stati generati prima di renderizzare
+    generateCableReportData(); 
     const sortedCableNames = Object.keys(cableReportCache).sort();
 
     if (sortedCableNames.length === 0) {
@@ -965,6 +986,7 @@ function renderCableReport() {
                     </tr>
                 `;
             }
+            // Aggiungi un bordo inferiore solo all'ultima riga di un gruppo se ce ne sono più di una
             if (totalRows > 1) {
                 const lastRowIndex = tableHTML.lastIndexOf('<tr>');
                 tableHTML = tableHTML.substring(0, lastRowIndex) + '<tr style="border-bottom: 2px solid #000;">' + tableHTML.substring(lastRowIndex + 4);
@@ -977,7 +999,7 @@ function renderCableReport() {
 }
 
 function openCableReport() {
-    renderCableReport();
+    renderCableReport(); // Chiamata diretta della funzione resa disponibile
     openModal('modal-cable-report');
 }
 
@@ -1007,7 +1029,9 @@ function exportCableReportToPDF() {
                 textColor: 255
             },
             didDrawCell: (data) => {
-                if (data.column.index <= 1 && data.cell.raw.rowSpan > 1) {
+                // Questa logica serve per gestire le rowspan nella tabella HTML,
+                // assicurandosi che i bordi siano disegnati correttamente
+                if (data.column.index <= 1 && data.cell.raw && data.cell.raw.rowSpan > 1) {
                     doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height * data.cell.raw.rowSpan, 'S');
                     doc.autoTableText(data.cell.text, data.cell.x + data.cell.padding('left'), data.cell.y + data.cell.height / 2, {
                         halign: 'left',
@@ -1028,17 +1052,42 @@ function exportCableReportToPDF() {
 
 // --- 10. GESTIONE LOG COMPLETA (MODAL) ---
 function openLogManager() {
+    currentPage = 1; // Resetta la pagina alla prima all'apertura
     renderLogTable();
     populateImportSelect();
     openModal('modal-log-manager');
 }
 function renderLogTable(logs) {
     const tableBody = document.getElementById('log-table-body');
-    if (!tableBody) return;
+    const paginationContainer = document.getElementById('log-pagination');
+    if (!tableBody || !paginationContainer) return;
 
-    const logList = logs || Object.values(tuttiDatiLog).flat().sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+    // Filtra i log prima di impaginarli
+    let filteredLogs = logs;
+    if (!filteredLogs) {
+        filteredLogs = Object.values(tuttiDatiLog).flat();
+        const dateFilter = document.getElementById('log-table-filter-date').value;
+        const shipFilter = document.getElementById('log-table-filter-ship').value.toLowerCase();
+        const colorFilter = document.getElementById('log-table-filter-color').value;
 
-    tableBody.innerHTML = logList.map(log => {
+        filteredLogs = filteredLogs.filter(log => {
+            const shipMatch = !shipFilter || log.ship.toLowerCase().includes(shipFilter);
+            // Il confronto della data deve tenere conto del formato YYYY-MM-DD HH:MM:SS
+            const dateMatch = !dateFilter || log.log_timestamp.startsWith(dateFilter);
+            const colorMatch = !colorFilter || log.color_code === colorFilter;
+            return shipMatch && dateMatch && colorMatch;
+        });
+    }
+
+    // Ordina i log per timestamp decrescente per la visualizzazione nella tabella
+    filteredLogs.sort((a, b) => new Date(b.log_timestamp) - new Date(a.log_timestamp));
+
+    const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+    const start = (currentPage - 1) * logsPerPage;
+    const end = start + logsPerPage;
+    const paginatedLogs = filteredLogs.slice(start, end);
+
+    tableBody.innerHTML = paginatedLogs.map(log => {
         const intersections = intersectionCache[log.box_id] || [];
         const cablesText = intersections.map(c => c.name).join(', ') || '-';
         return `
@@ -1051,7 +1100,36 @@ function renderLogTable(logs) {
                 <td>${log.import_id || 'manual'}</td>
                 <td>${cablesText}</td>
             </tr>
-        `}).join('') || '<tr><td colspan="7" style="text-align:center; padding: 15px;">Nessun log trovato.</td></tr>';
+        `}).join('') || '<tr><td colspan="7" class="empty-row" style="text-align:center; padding: 15px;">Nessun log trovato.</td></tr>';
+
+    // Gestione della paginazione
+    paginationContainer.innerHTML = '';
+    if (totalPages > 1) {
+        const prevButton = document.createElement('button');
+        prevButton.textContent = 'Precedente';
+        prevButton.disabled = currentPage === 1;
+        prevButton.classList.add('pagination-button');
+        prevButton.onclick = () => { currentPage--; renderLogTable(); };
+        paginationContainer.appendChild(prevButton);
+
+        const pageInfo = document.createElement('span');
+        pageInfo.textContent = ` Pagina ${currentPage} di ${totalPages} `;
+        pageInfo.classList.add('page-info');
+        paginationContainer.appendChild(pageInfo);
+
+        const nextButton = document.createElement('button');
+        nextButton.textContent = 'Successiva';
+        nextButton.disabled = currentPage === totalPages;
+        nextButton.classList.add('pagination-button');
+        nextButton.onclick = () => { currentPage++; renderLogTable(); };
+        paginationContainer.appendChild(nextButton);
+    }
+    
+    // Aggiorna lo stato del checkbox "Seleziona Tutto"
+    const masterCheckbox = document.querySelector('#log-table-body').closest('table').querySelector('th input[type="checkbox"]');
+    if (masterCheckbox) {
+        masterCheckbox.checked = false; // Deseleziona tutto al cambio pagina o filtro
+    }
 }
 async function populateImportSelect() {
     try {
@@ -1071,26 +1149,15 @@ async function populateImportSelect() {
     }
 }
 function applyLogTableFilters() {
-    const dateFilter = document.getElementById('log-table-filter-date').value;
-    const shipFilter = document.getElementById('log-table-filter-ship').value.toLowerCase();
-    const colorFilter = document.getElementById('log-table-filter-color').value;
-
-    const allLogs = Object.values(tuttiDatiLog).flat();
-
-    const filteredLogs = allLogs.filter(log => {
-        const shipMatch = !shipFilter || log.ship.toLowerCase().includes(shipFilter);
-        const dateMatch = !dateFilter || log.log_timestamp.startsWith(dateFilter);
-        const colorMatch = !colorFilter || log.color_code === colorFilter;
-        return shipMatch && dateMatch && colorMatch;
-    });
-
-    renderLogTable(filteredLogs);
+    currentPage = 1; // Resetta alla prima pagina quando i filtri cambiano
+    renderLogTable();
 }
 function resetLogTableFilters() {
     document.getElementById('log-table-filter-date').value = '';
     document.getElementById('log-table-filter-ship').value = '';
     document.getElementById('log-table-filter-color').value = '';
-    document.querySelector('#log-table-body input[type="checkbox"]').checked = false;
+    // Non azzerare il master checkbox qui, verrà gestito da renderLogTable
+    currentPage = 1; // Resetta alla prima pagina
     renderLogTable();
 }
 function toggleSelectAll(masterCheckbox) {
@@ -1111,6 +1178,8 @@ async function deleteSelectedImport() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ import_id: importId })
         });
+        showToast(`Batch "${importId}" eliminato con successo.`, 'info');
+        // Il broadcast gestirà l'aggiornamento del DOM
     }
 }
 async function deleteSelectedLogs() {
@@ -1125,20 +1194,32 @@ async function deleteSelectedLogs() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ log_ids: selectedIds })
         });
+        showToast(`Eliminati ${selectedIds.length} log selezionati.`, 'info');
+        // Il broadcast gestirà l'aggiornamento del DOM
     }
 }
 function exportVisibleLogs() {
-    const headers = ["Timestamp", "Box", "Nave", "Colore", "Import ID"];
-    const rows = Array.from(document.querySelectorAll('#log-table-body tr'));
+    const headers = ["Timestamp", "Box", "Nave", "Colore", "Import ID", "Cavi Intersecati"];
+    const rows = Array.from(document.querySelectorAll('#log-table-body tr:not(.empty-row)')); // Escludi la riga "Nessun log trovato."
 
-    if (rows.length === 0 || rows[0].cells.length < 2) {
+    if (rows.length === 0) {
         showToast('Nessun dato da esportare.', 'info');
         return;
     }
 
     let csvContent = headers.join(";") + "\n";
     rows.forEach(row => {
-        const rowData = Array.from(row.cells).slice(1).map(cell => `"${cell.innerText.replace(/"/g, '""')}"`);
+        // Ignora il primo td (checkbox) e mappa gli innerText delle celle
+        const rowData = Array.from(row.cells).slice(1).map(cell => {
+            // Pulizia del testo per il CSV, rimuovendo emoji o caratteri non desiderati
+            let cellText = cell.innerText;
+            if (cell.querySelector('span[style*="font-weight:bold"]')) { // Se è la cella del colore
+                cellText = cell.innerText.replace('●', '').trim(); // Rimuovi il pallino
+                // Oppure potresti voler convertire il codice colore effettivo
+                // ad esempio, trovare il value di log.color_code in base allo stile del pallino
+            }
+            return `"${cellText.replace(/"/g, '""')}"`; // Escapa le virgolette e avvolge tra virgolette
+        });
         csvContent += rowData.join(";") + "\n";
     });
 
@@ -1174,23 +1255,38 @@ function connectWebSocket() {
         const message = JSON.parse(event.data);
         console.log("WebSocket message received:", message);
 
-        if (message.type === 'config_updated' || message.type === 'full_reload_needed' || message.type === 'logs_reset') {
-            const reloadMsg = {
-                'config_updated': "Configurazione aggiornata. Ricaricamento in corso...",
-                'full_reload_needed': "Dati aggiornati sul server. Ricaricamento in corso...",
-                'logs_reset': "Tutti i log sono stati resettati. Ricaricamento in corso..."
-            }[message.type];
-            
-            showToast(reloadMsg, 'info');
+        if (message.type === 'config_updated') {
+            showToast("Configurazione aggiornata. Ricaricamento in corso...", 'info');
             setTimeout(() => window.location.reload(), 1500);
             return; 
         }
 
         if (message.type === 'box_history_updated') {
             tuttiDatiLog[message.boxId] = message.data;
-            // Aggiorna la mappa e i report in tempo reale
             renderizzaStili();
+            // Se il pannello storico è aperto per il box aggiornato, renderizza di nuovo la cronologia
+            if (document.getElementById('history-title').innerText.includes(message.boxId)) {
+                renderHistory(message.boxId);
+            }
             generateCableReportData();
+        }
+
+        if (message.type === 'all_logs_updated') { // Nuovo tipo di messaggio per aggiornamenti massivi
+            tuttiDatiLog = message.data;
+            renderizzaStili();
+            generateCableReportData(); // Rigenera la cache delle intersezioni per il report cavi
+            // Aggiorna la selezione degli import se la modale è aperta
+            if (document.getElementById('modal-log-manager').classList.contains('visible')) {
+                populateImportSelect();
+                renderLogTable(); // Ricarica la tabella dei log
+            }
+            // Aggiorna anche la dashboard se è aperta
+            if (document.getElementById('modal-dashboard').classList.contains('visible')) {
+                updateDashboardStats();
+                renderTodaysActivityDetail();
+                renderExpiredLogsList();
+                createOrUpdateCharts();
+            }
         }
       
         if (document.getElementById('modal-dashboard').classList.contains('visible')) {
@@ -1200,7 +1296,7 @@ function connectWebSocket() {
              createOrUpdateCharts();
         }
         if (document.getElementById('modal-log-manager').classList.contains('visible')) {
-             renderLogTable();
+             renderLogTable(); // Assicura che la tabella dei log sia aggiornata se visibile
         }
     };
 
@@ -1252,8 +1348,10 @@ async function inizializzaApplicazione() {
 
         await Promise.allSettled(layerPromises);
 
+        // Precompute intersezioni dopo che i layer esterni sono caricati
         await precomputeAllIntersections();
 
+        // Genera i dati del report cavi inizialmente
         generateCableReportData();
 
         map.on('mousemove', function(e) {

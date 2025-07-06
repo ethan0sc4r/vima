@@ -166,7 +166,13 @@ def import_logs_batch():
             logs_to_insert
         )
         db.commit()
-        broadcast({'type': 'full_reload_needed'})
+        # Recupera tutti i log aggiornati e broadcast
+        logs_cursor = db.execute('SELECT * FROM logs ORDER BY box_id, log_timestamp DESC').fetchall()
+        logs_by_box = defaultdict(list)
+        for row in logs_cursor:
+            logs_by_box[row['box_id']].append(dict(row))
+        
+        broadcast({'type': 'all_logs_updated', 'data': dict(logs_by_box), 'import_id': import_id})
     
     return jsonify({'status': 'success', 'imported_count': len(logs_to_insert), 'import_id': import_id})
 
@@ -182,7 +188,12 @@ def delete_logs_batch():
         db.execute("DELETE FROM logs WHERE import_id = ?", (data['import_id'],))
     
     db.commit()
-    broadcast({'type': 'full_reload_needed'})
+    # Recupera tutti i log aggiornati e broadcast
+    logs_cursor = db.execute('SELECT * FROM logs ORDER BY box_id, log_timestamp DESC').fetchall()
+    logs_by_box = defaultdict(list)
+    for row in logs_cursor:
+        logs_by_box[row['box_id']].append(dict(row))
+    broadcast({'type': 'all_logs_updated', 'data': dict(logs_by_box)})
     return jsonify({'status': 'success'})
 
 @app.route('/api/imports', methods=['GET'])
@@ -217,7 +228,9 @@ def reset_logs():
     db = get_db()
     db.execute('DELETE FROM logs')
     db.commit()
-    broadcast({'type': 'logs_reset'})
+    # Recupera tutti i log (saranno vuoti) e broadcast
+    logs_by_box = defaultdict(list)
+    broadcast({'type': 'all_logs_updated', 'data': dict(logs_by_box)})
     return jsonify({'status': 'success'})
 
 # BLOCCO DI AVVIO SERVER
